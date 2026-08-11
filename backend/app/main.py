@@ -1,13 +1,17 @@
 import hashlib
 import hmac
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 
+import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 
 from .database import get_db, engine, Base
+from .models import Repository, PullRequest, PullRequestFile
 
 Base.metadata.create_all(bind=engine)
 
@@ -35,12 +39,105 @@ def health(db: Session = Depends(get_db)):
         )
 
 
+def parse_github_timestamp(ts):
+    if ts is None:
+        return None
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def store_pull_request(payload, db: Session):
+    repo_data = payload["repository"]
+    pr_data = payload["pull_request"]
+
+    repo = db.query(Repository).filter(Repository.github_id == repo_data["id"]).first()
+    if not repo:
+        repo = Repository(
+            github_id=repo_data["id"],
+            owner=repo_data["owner"]["login"],
+            name=repo_data["name"],
+            full_name=repo_data["full_name"],
+            default_branch=repo_data.get("default_branch"),
+            url=repo_data["html_url"],
+        )
+        db.add(repo)
+        db.flush()
+
+    existing = db.query(PullRequest).filter(PullRequest.github_id == pr_data["id"]).first()
+    if existing:
+        existing.title = pr_data["title"]
+        existing.body = pr_data.get("body")
+        existing.state = pr_data["state"]
+        existing.draft = pr_data.get("draft", False)
+        existing.source_branch = pr_data["head"]["ref"]
+        existing.target_branch = pr_data["base"]["ref"]
+        existing.head_sha = pr_data["head"]["sha"]
+        existing.base_sha = pr_data["base"]["sha"]
+        existing.url = pr_data["html_url"]
+        existing.closed_at = parse_github_timestamp(pr_data.get("closed_at"))
+        existing.updated_at = func.now()
+        pr = existing
+    else:
+        pr = PullRequest(
+            github_id=pr_data["id"],
+            repository_id=repo.id,
+            number=pr_data["number"],
+            title=pr_data["title"],
+            body=pr_data.get("body"),
+            state=pr_data["state"],
+            draft=pr_data.get("draft", False),
+            author_login=pr_data["user"]["login"],
+            source_branch=pr_data["head"]["ref"],
+            target_branch=pr_data["base"]["ref"],
+            head_sha=pr_data["head"]["sha"],
+            base_sha=pr_data["base"]["sha"],
+            url=pr_data["html_url"],
+            opened_at=parse_github_timestamp(pr_data["created_at"]),
+            closed_at=parse_github_timestamp(pr_data.get("closed_at")),
+        )
+        db.add(pr)
+
+    db.flush()
+
+    store_pr_files(pr, pr_data, repo_data, db)
+
+    db.commit()
+
+
+def store_pr_files(pr, pr_data, repo_data, db: Session):
+    files_url = pr_data["url"] + "/files"
+
+    headers = {}
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    try:
+        resp = httpx.get(files_url, headers=headers, timeout=30.0)
+        resp.raise_for_status()
+        files = resp.json()
+    except Exception:
+        return
+
+    db.query(PullRequestFile).filter(PullRequestFile.pull_request_id == pr.id).delete()
+
+    for f in files:
+        pr_file = PullRequestFile(
+            pull_request_id=pr.id,
+            filename=f["filename"],
+            status=f["status"],
+            additions=f.get("additions", 0),
+            deletions=f.get("deletions", 0),
+            changes=f.get("changes", 0),
+            patch=f.get("patch"),
+            sha=f.get("sha"),
+        )
+        db.add(pr_file)
+
+
 @app.post("/github/webhook")
-async def github_webhook(request: Request):
-    # raw request body
+async def github_webhook(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
 
-    # github sig
     signature = request.headers.get("X-Hub-Signature-256")
 
     if not signature:
@@ -63,7 +160,12 @@ async def github_webhook(request: Request):
 
     payload = await request.json()
 
-    print(payload)
+    event_type = request.headers.get("X-GitHub-Event")
+
+    if event_type == "pull_request":
+        action = payload.get("action")
+        if action in ("opened", "synchronize"):
+            store_pull_request(payload, db)
 
     return {"ok": True}
 
