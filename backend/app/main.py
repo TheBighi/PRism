@@ -10,8 +10,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
-from .database import get_db, engine, Base
-from .models import Repository, PullRequest, PullRequestFile
+from app.database import get_db, engine, Base
+from app.models import Repository, PullRequest, PullRequestFile
+
+from app.core.queue import enqueue_pr_analysis, get_queue
 
 Base.metadata.create_all(bind=engine)
 
@@ -102,6 +104,8 @@ def store_pull_request(payload, db: Session):
 
     db.commit()
 
+    return pr
+
 
 def store_pr_files(pr, pr_data, repo_data, db: Session):
     files_url = pr_data["url"] + "/files"
@@ -165,7 +169,11 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     if event_type == "pull_request":
         action = payload.get("action")
         if action in ("opened", "synchronize"):
-            store_pull_request(payload, db)
+            pr = store_pull_request(payload, db)
+
+            queue = await get_queue()
+
+            await enqueue_pr_analysis(queue, pr.id)
 
     return {"ok": True}
 
