@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 from arq.connections import RedisSettings
 
 from app.database import SessionLocal
-from app.models import AnalysisJob, JobStatus
+from app.models import AnalysisJob, JobStatus, PullRequest, PullRequestFile, Repository
+from app.core.linting import lint_pull_request_files, LintError
 
 import time
 
@@ -10,17 +11,27 @@ async def analyze_pr(ctx, pull_request_id: int, job_id: int):
     db = SessionLocal()
     try:
         job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
-        print(f"Starting analysis for PR {pull_request_id} with job ID {job_id}")
         job.status = JobStatus.running
         job.started_at = datetime.now(timezone.utc)
         db.commit()
 
-        print(f"Analyzing PR {pull_request_id}")
-        time.sleep(10)
+        pr = db.query(PullRequest).filter(PullRequest.id == pull_request_id).first()
+        repo = db.query(Repository).filter(Repository.id == pr.repository_id).first()
+        files = (
+            db.query(PullRequestFile)
+            .filter(PullRequestFile.pull_request_id == pr.id)
+            .filter(PullRequestFile.status != "removed")
+            .all()
+        )
+        filenames = [f.filename for f in files]
+
+        results = lint_pull_request_files(repo.url, pr.head_sha, filenames)
+
         job.status = JobStatus.done
+        job.results = results
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
-    except Exception as e:
+    except (Exception, LintError) as e:
         db.rollback()
         job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
         job.status = JobStatus.failed
