@@ -1,4 +1,6 @@
-from sqlalchemy import Column, BigInteger, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint
+import enum
+
+from sqlalchemy import Column, BigInteger, Enum, Integer, String, Text, Boolean, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.sql import func
 
 from .database import Base
@@ -61,3 +63,21 @@ class PullRequestFile(Base):
     __table_args__ = (
         UniqueConstraint("pull_request_id", "filename", name="uq_pr_file"),
     )
+
+class JobStatus(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
+class AnalysisJob(Base):
+    __tablename__ = "analysis_jobs"
+
+    id = Column(Integer, primary_key=True)
+    pull_request_id = Column(Integer, ForeignKey("pull_requests.id"), nullable=False)
+    status = Column(Enum(JobStatus), nullable=False, default=JobStatus.pending)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)

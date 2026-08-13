@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from app.database import get_db, engine, Base
-from app.models import Repository, PullRequest, PullRequestFile
+from app.models import Repository, PullRequest, PullRequestFile, AnalysisJob
 
 from app.core.queue import enqueue_pr_analysis, get_queue
 
@@ -173,10 +173,24 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
 
             queue = await get_queue()
 
-            await enqueue_pr_analysis(queue, pr.id)
+            await enqueue_pr_analysis(queue, pr.id, db)
 
     return {"ok": True}
 
+@app.get("/jobs/{job_id}")
+def get_job_status(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "id": job.id,
+        "pull_request_id": job.pull_request_id,
+        "status": job.status,
+        "error": job.error,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
 
 if __name__ == "__main__":
     import uvicorn
