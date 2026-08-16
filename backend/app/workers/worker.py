@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
+from pathlib import Path
+import shutil
+import tempfile
 from arq.connections import RedisSettings
 
 from app.database import SessionLocal
 from app.models import AnalysisJob, JobStatus, PullRequest, PullRequestFile, Repository
-from app.core.linting import lint_pull_request_files, LintError
+from app.core.linting import clone_repo_at_sha, LintError, lint_files
+from app.core.security_scan import scan_files, SecurityScanError
 
 import time
 
@@ -25,13 +29,22 @@ async def analyze_pr(ctx, pull_request_id: int, job_id: int):
         )
         filenames = [f.filename for f in files]
 
-        results = lint_pull_request_files(repo.url, pr.head_sha, filenames)
+        tmp_dir = Path(tempfile.mkdtemp(prefix="pr-analysis-"))
+        try:
+            clone_repo_at_sha(repo.url, pr.head_sha, tmp_dir)
+
+            results = []
+            results.extend(lint_files(tmp_dir, filenames))
+            results.extend(scan_files(tmp_dir, filenames))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
         job.status = JobStatus.done
         job.results = results
+        print(f"Analysis results for PR {pull_request_id}: {results}")
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
-    except (Exception, LintError) as e:
+    except (Exception, LintError, SecurityScanError) as e:
         db.rollback()
         job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
         job.status = JobStatus.failed

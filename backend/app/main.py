@@ -165,10 +165,9 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     payload = await request.json()
 
     event_type = request.headers.get("X-GitHub-Event")
-
     if event_type == "pull_request":
         action = payload.get("action")
-        if action in ("opened", "synchronize"):
+        if action in ("opened", "synchronize", "reopened"):
             pr = store_pull_request(payload, db)
 
             queue = await get_queue()
@@ -190,6 +189,7 @@ def get_job_status(job_id: int, db: Session = Depends(get_db)):
         "created_at": job.created_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,
+        "results": job.results,
     }
 
 if __name__ == "__main__":

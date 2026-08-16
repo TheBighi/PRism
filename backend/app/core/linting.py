@@ -7,6 +7,7 @@ changed files, and normalizes results into:
     {file, line, severity, category, source, message}
 """
 
+from curses import raw
 import json
 import shutil
 import subprocess
@@ -78,11 +79,19 @@ def run_ruff(repo_dir: Path, files: list[str]) -> list[dict]:
     normalized = []
     for item in raw:
         code = item.get("code") or ""
-        category = RUFF_CATEGORY_MAP.get(code[:1], "other")
+        rel_path = Path(item["filename"]).relative_to(repo_dir).as_posix()
+
+        if code == "invalid-syntax":
+            severity = "error"
+            category = "syntax"
+        else:
+            severity = "error" if code.startswith("F") else "warning"
+            category = RUFF_CATEGORY_MAP.get(code[:1], "other")
+
         normalized.append({
-            "file": item["filename"],
+            "file": rel_path,
             "line": item["location"]["row"],
-            "severity": "error" if code.startswith("F") else "warning",
+            "severity": severity,
             "category": category,
             "source": "ruff",
             "message": f"[{code}] {item['message']}",
@@ -126,22 +135,12 @@ def run_eslint(repo_dir: Path, files: list[str]) -> list[dict]:
     return normalized
 
 
-def lint_pull_request_files(clone_url: str, head_sha: str, filenames: list[str]) -> list[dict]:
-    """
-    Main entry point: clone the repo at head_sha, run the appropriate linter
-    per file extension, and return one normalized list combining both.
-    """
-    tmp_dir = Path(tempfile.mkdtemp(prefix="pr-lint-"))
-    try:
-        clone_repo_at_sha(clone_url, head_sha, tmp_dir)
+def lint_files(repo_dir: Path, filenames: list[str]) -> list[dict]:
+    existing = _filter_existing(repo_dir, filenames)
+    py_files = [f for f in existing if Path(f).suffix in PY_EXTENSIONS]
+    js_files = [f for f in existing if Path(f).suffix in JS_EXTENSIONS]
 
-        existing = _filter_existing(tmp_dir, filenames)
-        py_files = [f for f in existing if Path(f).suffix in PY_EXTENSIONS]
-        js_files = [f for f in existing if Path(f).suffix in JS_EXTENSIONS]
-
-        results = []
-        results.extend(run_ruff(tmp_dir, py_files))
-        results.extend(run_eslint(tmp_dir, js_files))
-        return results
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    results = []
+    results.extend(run_ruff(repo_dir, py_files))
+    results.extend(run_eslint(repo_dir, js_files))
+    return results
