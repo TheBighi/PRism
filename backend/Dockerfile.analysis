@@ -1,0 +1,18 @@
+FROM python:3.13-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir ruff bandit
+
+WORKDIR /analysis
+COPY app/core/linting.py app/core/security_scan.py app/core/run_analysis.py ./
+
+# non-root: even inside the sandbox, don't run as root
+RUN useradd -m runner
+USER runner
+
+ENTRYPOINT ["python", "run_analysis.py"]
