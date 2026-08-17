@@ -29,7 +29,7 @@ async def analyze_pr(ctx, pull_request_id: int, job_id: int):
         )
         filenames = [f.filename for f in files]
 
-        results = run_analysis_in_container(repo.url, pr.head_sha, filenames)
+        results = run_analysis_in_container(repo.url, pr.base_sha, pr.head_sha, filenames)
 
         job.status = JobStatus.done
         job.results = results

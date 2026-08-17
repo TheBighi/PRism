@@ -22,7 +22,7 @@ from docker.errors import APIError, ImageNotFound, NotFound
 logger = logging.getLogger(__name__)
 
 ANALYSIS_IMAGE = "pr-analysis:latest"
-CONTAINER_TIMEOUT_S = 120
+CONTAINER_TIMEOUT_S = 240
 
 
 class LintError(Exception):
@@ -31,7 +31,7 @@ class LintError(Exception):
     pass
 
 
-def run_analysis_in_container(clone_url: str, head_sha: str, filenames: list[str]) -> list[dict]:
+def run_analysis_in_container(clone_url: str, base_sha: str, head_sha: str, filenames: list[str]) -> list[dict]:
     if not filenames:
         return []
 
@@ -40,7 +40,7 @@ def run_analysis_in_container(clone_url: str, head_sha: str, filenames: list[str
     try:
         container = client.containers.run(
             ANALYSIS_IMAGE,
-            command=[clone_url, head_sha, *filenames],
+            command=[clone_url, base_sha, head_sha, *filenames],
             detach=True,
             network_mode="bridge",        # needed for git fetch + npm audit registry calls
             mem_limit="512m",
