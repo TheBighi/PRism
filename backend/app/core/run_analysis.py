@@ -23,16 +23,21 @@ def _checkout(repo_dir: Path, clone_url: str, sha: str):
 def _normalize_type_errors(errors):
     return [
         {
-            "kind": "type_error",
-            "tool": e.tool,
             "file": e.file,
             "line": e.line,
             "column": e.column,
-            "code": e.code,
-            "message": e.message,
+            "severity": "error",
+            "category": "types",
+            "source": e.tool,
+            "message": f"[{e.code}] {e.message}" if e.code else e.message,
         }
         for e in errors
     ]
+
+
+def _clean_path(f: str) -> str:
+    """Normalize a tool-reported path to a repo-relative posix path."""
+    return Path(f).as_posix().removeprefix("./")
 
 
 def main():
@@ -56,6 +61,10 @@ def main():
         _checkout(tmp_dir, clone_url, head_sha)  # restore for anything downstream
 
         results.extend(_normalize_type_errors(new_errors(head_type_errors, base_type_errors)))
+
+        for r in results:
+            if isinstance(r.get("file"), str):
+                r["file"] = _clean_path(r["file"])
 
         print(json.dumps(results))
         sys.exit(0)
