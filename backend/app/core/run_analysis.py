@@ -5,6 +5,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from dependency_diff import (
+    DependencyDiffError,
+    dependency_state,
+    diff_dependencies,
+    normalize_dependency_changes,
+)
 from linting import clone_repo_at_sha, lint_files, LintError
 from security_scan import scan_files, SecurityScanError
 from type_check import type_check_files, new_errors, TypeCheckError
@@ -56,11 +62,14 @@ def main():
         results.extend(scan_files(tmp_dir, filenames))
 
         head_type_errors = type_check_files(tmp_dir, filenames)
+        head_deps = dependency_state(tmp_dir)
         _checkout(tmp_dir, clone_url, base_sha)
         base_type_errors = type_check_files(tmp_dir, filenames)
+        base_deps = dependency_state(tmp_dir)
         _checkout(tmp_dir, clone_url, head_sha)  # restore for anything downstream
 
         results.extend(_normalize_type_errors(new_errors(head_type_errors, base_type_errors)))
+        results.extend(normalize_dependency_changes(diff_dependencies(head_deps, base_deps)))
 
         for r in results:
             if isinstance(r.get("file"), str):
@@ -68,7 +77,7 @@ def main():
 
         print(json.dumps(results))
         sys.exit(0)
-    except (LintError, SecurityScanError, TypeCheckError) as e:
+    except (LintError, SecurityScanError, TypeCheckError, DependencyDiffError) as e:
         print(f"analysis error: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:

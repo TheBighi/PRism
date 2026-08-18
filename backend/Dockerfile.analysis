@@ -10,7 +10,7 @@ RUN npm install -g typescript
 RUN pip install --no-cache-dir ruff bandit mypy
 
 WORKDIR /analysis
-COPY app/core/linting.py app/core/security_scan.py app/core/run_analysis.py app/core/type_check.py ./
+COPY app/core/linting.py app/core/security_scan.py app/core/run_analysis.py app/core/type_check.py app/core/dependency_diff.py ./
 
 # non-root: even inside the sandbox, don't run as root
 RUN useradd -m runner
