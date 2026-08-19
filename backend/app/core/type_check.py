@@ -2,6 +2,7 @@
 type_check.py — run mypy/tsc against changed files and return only errors
 introduced by the diff (i.e. absent on the base commit).
 """
+import json
 import re
 import subprocess
 from collections import Counter, namedtuple
@@ -23,11 +24,17 @@ _TSC_RE = re.compile(
 
 
 def type_check_files(repo_dir: Path, filenames: list[str]) -> list[TypeError_]:
-    """Run whichever type checker applies, based on file extensions present."""
+    """Run whichever type checker applies, based on file extensions present.
+
+    Files are filtered to those existing on the current checkout first —
+    on the base commit, files added by the PR won't exist, and mypy/tsc
+    hard-fail on nonexistent paths (same reason linting filters first).
+    """
+    existing = [f for f in filenames if (repo_dir / f).is_file()]
     results: list[TypeError_] = []
-    py_files = [f for f in filenames if f.endswith(".py")]
-    ts_files = [f for f in filenames if f.endswith((".ts", ".tsx"))]
-    js_files = [f for f in filenames if f.endswith((".js", ".jsx"))]
+    py_files = [f for f in existing if f.endswith(".py")]
+    ts_files = [f for f in existing if f.endswith((".ts", ".tsx"))]
+    js_files = [f for f in existing if f.endswith((".js", ".jsx"))]
 
     if py_files:
         results.extend(_run_mypy(repo_dir, py_files))
@@ -41,7 +48,7 @@ def type_check_files(repo_dir: Path, filenames: list[str]) -> list[TypeError_]:
 
 def _run_mypy(repo_dir: Path, files: list[str]) -> list[TypeError_]:
     cmd = ["mypy", "--show-error-codes", "--no-error-summary", "--no-color-output", *files]
-    proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=300, check=False)
     if proc.returncode not in (0, 1):  # 0 = clean, 1 = type errors found; anything else = tool failure
         raise TypeCheckError(f"mypy failed: {proc.stderr.strip() or proc.stdout.strip()}")
     return _parse(proc.stdout, _MYPY_RE, "mypy")
@@ -49,7 +56,7 @@ def _run_mypy(repo_dir: Path, files: list[str]) -> list[TypeError_]:
 
 def _run_tsc(repo_dir: Path, files: list[str]) -> list[TypeError_]:
     cmd = ["npx", "tsc", "--noEmit", "--pretty", "false", *files]
-    proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=300, check=False)
     if proc.returncode not in (0, 1, 2):
         raise TypeCheckError(f"tsc failed: {proc.stderr.strip() or proc.stdout.strip()}")
     return _parse(proc.stdout, _TSC_RE, "tsc")
@@ -59,10 +66,9 @@ def _checks_js(repo_dir: Path) -> bool:
     if not tsconfig.exists():
         return False
     try:
-        import json as _json
-        cfg = _json.loads(tsconfig.read_text())
+        cfg = json.loads(tsconfig.read_text())
         return bool(cfg.get("compilerOptions", {}).get("checkJs"))
-    except Exception:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return False
 
 def _parse(output: str, pattern: re.Pattern, tool: str) -> list[TypeError_]:

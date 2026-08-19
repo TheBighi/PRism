@@ -7,13 +7,10 @@ changed files, and normalizes results into:
     {file, line, severity, category, source, message}
 """
 
-from curses import raw
 import json
-import shutil
 import subprocess
-import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 PY_EXTENSIONS = {".py"}
 JS_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx"}
@@ -66,6 +63,7 @@ def run_ruff(repo_dir: Path, files: list[str]) -> list[dict]:
         cwd=repo_dir,
         capture_output=True,
         text=True,
+        check=False,
     )
     # ruff exits non-zero when it finds lint errors — that's expected, not a failure.
     if result.returncode not in (0, 1):
@@ -108,6 +106,7 @@ def run_eslint(repo_dir: Path, files: list[str]) -> list[dict]:
         cwd=repo_dir,
         capture_output=True,
         text=True,
+        check=False,
     )
     # eslint also exits non-zero on lint findings.
     if result.returncode not in (0, 1):
