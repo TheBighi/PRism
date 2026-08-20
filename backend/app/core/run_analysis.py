@@ -23,6 +23,7 @@ from test_runner import (
     run_tests,
 )
 from type_check import TypeCheckError, new_errors, type_check_files
+from risk_score import compute_risk_score
 
 
 def _checkout(repo_dir: Path, clone_url: str, sha: str):
@@ -160,7 +161,11 @@ def main():
             "type": "diff_stats",
             "stats": diff_stats(tmp_dir, base_sha, head_sha, filenames),
         })
-
+        #!!!!!!!!!!
+        output.append({
+            "type": "risk_score",
+            **compute_risk_score(output, filenames),
+        })
         print(json.dumps(output))
         sys.exit(0)
     except (LintError, SecurityScanError, TypeCheckError, DependencyDiffError, TestRunError) as e:
