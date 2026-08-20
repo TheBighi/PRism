@@ -11,6 +11,7 @@ from dependency_diff import (
     diff_dependencies,
     normalize_dependency_changes,
 )
+from diff_stats import diff_stats
 from linting import LintError, clone_repo_at_sha, lint_files
 from security_scan import SecurityScanError, scan_files
 from test_mapping import map_source_to_tests
@@ -154,6 +155,10 @@ def main():
         output.append({
             "type": "coverage_delta",
             "coverage": coverage_delta(head_coverage, base_coverage),
+        })
+        output.append({
+            "type": "diff_stats",
+            "stats": diff_stats(tmp_dir, base_sha, head_sha, filenames),
         })
 
         print(json.dumps(output))

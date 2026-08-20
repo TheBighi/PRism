@@ -10,7 +10,7 @@ RUN npm install -g typescript jest
 RUN pip install --no-cache-dir ruff bandit mypy pytest coverage
 
 WORKDIR /analysis
-COPY app/core/linting.py app/core/security_scan.py app/core/run_analysis.py app/core/type_check.py app/core/dependency_diff.py app/core/test_mapping.py app/core/test_runner.py ./
+COPY app/core/linting.py app/core/security_scan.py app/core/run_analysis.py app/core/type_check.py app/core/dependency_diff.py app/core/diff_stats.py app/core/test_mapping.py app/core/test_runner.py ./
 
 # non-root: even inside the sandbox, don't run as root
 RUN useradd -m runner
