@@ -190,6 +190,11 @@ def get_job_status(job_id: int, db: Session = Depends(get_db)):
         "started_at": job.started_at,
         "finished_at": job.finished_at,
         "results": job.results,
+        "explanation": job.explanation,
+        "explanation_status": job.explanation_status,
+        "explanation_error": job.explanation_error,
+        "explanation_started_at": job.explanation_started_at,
+        "explanation_finished_at": job.explanation_finished_at,
     }
 
 if __name__ == "__main__":

@@ -70,6 +70,12 @@ class JobStatus(str, enum.Enum):
     done = "done"
     failed = "failed"
 
+class ExplanationStatus(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
+    skipped = "skipped"
 
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
@@ -82,3 +88,12 @@ class AnalysisJob(Base):
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     results = Column(JSON, nullable=True)
+
+
+    explanation = Column(Text, nullable=True)
+    explanation_status = Column(
+        Enum(ExplanationStatus), nullable=False, default=ExplanationStatus.pending
+    )
+    explanation_error = Column(Text, nullable=True)
+    explanation_started_at = Column(DateTime(timezone=True), nullable=True)
+    explanation_finished_at = Column(DateTime(timezone=True), nullable=True)

@@ -6,6 +6,7 @@ from arq.connections import RedisSettings
 
 from app.database import SessionLocal
 from app.models import AnalysisJob, JobStatus, PullRequest, PullRequestFile, Repository
+from app.core.queue import enqueue_pr_analysis, enqueue_pr_explanation, get_queue
 
 import time
 
@@ -35,6 +36,10 @@ async def analyze_pr(ctx, pull_request_id: int, job_id: int):
         job.results = results
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
+
+        queue = await get_queue()
+
+        await enqueue_pr_explanation(queue, job_id)
     except (Exception, LintError) as e:
         db.rollback()
         job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
@@ -48,4 +53,7 @@ async def analyze_pr(ctx, pull_request_id: int, job_id: int):
 
 class WorkerSettings:
     functions = [analyze_pr]
+    queue_name = "analysis:queue"
+    max_jobs = 2
+    job_timeout = 300
     redis_settings = RedisSettings(host="localhost", port=6379)
