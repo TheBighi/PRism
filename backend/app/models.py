@@ -90,7 +90,7 @@ class AnalysisJob(Base):
     results = Column(JSON, nullable=True)
 
 
-    explanation = Column(Text, nullable=True)
+    explanation = Column(JSON, nullable=True)
     explanation_status = Column(
         Enum(ExplanationStatus), nullable=False, default=ExplanationStatus.pending
     )

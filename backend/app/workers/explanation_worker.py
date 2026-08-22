@@ -3,6 +3,8 @@ from app.models import AnalysisJob, JobStatus, ExplanationStatus, PullRequest, P
 
 from arq.connections import RedisSettings
 
+from app.core.llm import call_llm, build_explanation_prompt
+
 async def generate_explanation(ctx, job_id: int):
     db = SessionLocal()
     try:
@@ -12,9 +14,10 @@ async def generate_explanation(ctx, job_id: int):
         job.explanation_status = ExplanationStatus.running
         db.commit()
 
-        #prompt = build_explanation_prompt(job.results)  # truncate/select top findings by risk_score
+        prompt = build_explanation_prompt(job.results)  # truncate/select top findings by risk_score
+        job.explanation = await call_llm(prompt)
+
         print("Generating explanation for job_id:", job_id)
-        job.explanation = "explanation" #await call_llm(prompt)
         job.explanation_status = ExplanationStatus.done
         db.commit()
     except Exception as e:
