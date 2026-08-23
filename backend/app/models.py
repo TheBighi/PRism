@@ -39,7 +39,7 @@ class PullRequest(Base):
     opened_at = Column(DateTime(timezone=True), nullable=False)
     closed_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint("repository_id", "number", name="uq_repo_pr_number"),
@@ -80,8 +80,8 @@ class ExplanationStatus(str, enum.Enum):
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
 
-    id = Column(Integer, primary_key=True)
-    pull_request_id = Column(Integer, ForeignKey("pull_requests.id"), nullable=False)
+    id = Column(BigInteger, primary_key=True)
+    pull_request_id = Column(BigInteger, ForeignKey("pull_requests.id", ondelete="CASCADE"), nullable=False)
     status = Column(Enum(JobStatus), nullable=False, default=JobStatus.pending)
     error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

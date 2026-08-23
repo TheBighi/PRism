@@ -16,6 +16,7 @@ and to print exactly one JSON array to stdout on success.
 import json
 import logging
 
+import requests
 import docker
 from docker.errors import APIError, ImageNotFound, NotFound
 
@@ -25,7 +26,7 @@ ANALYSIS_IMAGE = "pr-analysis:latest"
 CONTAINER_TIMEOUT_S = 240
 
 
-class LintError(Exception):
+class AnalysisError(Exception):
     """Raised for any failure in the containerized analysis pipeline —
     covers image issues, container failures, timeouts, and bad output."""
     pass
@@ -53,43 +54,44 @@ def run_analysis_in_container(clone_url: str, base_sha: str, head_sha: str, file
             user="runner",
         )
     except ImageNotFound:
-        raise LintError(
+        raise AnalysisError(
             f"analysis image '{ANALYSIS_IMAGE}' not found — "
             f"build it with: docker build -f Dockerfile.analysis -t {ANALYSIS_IMAGE} ."
         )
     except APIError as e:
-        raise LintError(f"failed to start analysis container: {e}")
+        raise AnalysisError(f"failed to start analysis container: {e}")
 
     try:
         try:
             result = container.wait(timeout=CONTAINER_TIMEOUT_S)
-        except APIError as e:
-            # covers the client-side wait() timing out - container may still be
+        except (APIError, requests.RequestException) as e:
+            # covers the client-side wait() timing out (requests raises
+            # ReadTimeout on the socket read) - container may still be
             # running on the daemon side, so make sure to stop it before removal
             try:
                 container.stop(timeout=5)
             except (APIError, NotFound):
                 pass
-            raise LintError(f"analysis container timed out or lost connection: {e}")
+            raise AnalysisError(f"analysis container timed out or lost connection: {e}")
 
         stdout = container.logs(stdout=True, stderr=False).decode(errors="replace")
         stderr = container.logs(stdout=False, stderr=True).decode(errors="replace")
 
         if result["StatusCode"] != 0:
-            raise LintError(
+            raise AnalysisError(
                 f"analysis container exited {result['StatusCode']}: {stderr.strip() or '(no stderr)'}"
             )
 
         try:
             results = json.loads(stdout)
         except json.JSONDecodeError as e:
-            raise LintError(
+            raise AnalysisError(
                 f"could not parse container output as JSON: {e}\n"
                 f"stdout was: {stdout[:500]!r}"
             )
 
         if not isinstance(results, list):
-            raise LintError(f"expected a JSON array from container, got: {type(results).__name__}")
+            raise AnalysisError(f"expected a JSON array from container, got: {type(results).__name__}")
 
         return results
 

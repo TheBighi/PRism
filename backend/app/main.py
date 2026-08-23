@@ -6,9 +6,10 @@ from dotenv import load_dotenv
 
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from sqlalchemy.sql import func
+from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db, engine, Base
 from app.models import Repository, PullRequest, PullRequestFile, AnalysisJob
@@ -76,7 +77,6 @@ def store_pull_request(payload, db: Session):
         existing.base_sha = pr_data["base"]["sha"]
         existing.url = pr_data["html_url"]
         existing.closed_at = parse_github_timestamp(pr_data.get("closed_at"))
-        existing.updated_at = func.now()
         pr = existing
     else:
         pr = PullRequest(
@@ -115,12 +115,21 @@ def store_pr_files(pr, pr_data, repo_data, db: Session):
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
-    try:
-        resp = httpx.get(files_url, headers=headers, timeout=30.0)
+    files: list[dict] = []
+    page = 1
+    while True:
+        resp = httpx.get(
+            files_url,
+            headers=headers,
+            params={"per_page": 100, "page": page},
+            timeout=30.0,
+        )
         resp.raise_for_status()
-        files = resp.json()
-    except Exception:
-        return
+        batch = resp.json()
+        files.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
 
     db.query(PullRequestFile).filter(PullRequestFile.pull_request_id == pr.id).delete()
 
@@ -168,11 +177,15 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     if event_type == "pull_request":
         action = payload.get("action")
         if action in ("opened", "synchronize", "reopened"):
-            pr = store_pull_request(payload, db)
+            # store_pull_request does blocking DB + GitHub API work; run it on
+            # a worker thread so the event loop stays free.
+            pr = await run_in_threadpool(store_pull_request, payload, db)
 
             queue = await get_queue()
 
             await enqueue_pr_analysis(queue, pr.id, db)
+
+            return JSONResponse(status_code=202, content={"ok": True})
 
     return {"ok": True}
 

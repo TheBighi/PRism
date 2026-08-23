@@ -5,25 +5,25 @@ import sys
 import tempfile
 from pathlib import Path
 
-from dependency_diff import (
+from app.core.dependency_diff import (
     DependencyDiffError,
     dependency_state,
     diff_dependencies,
     normalize_dependency_changes,
 )
-from diff_stats import diff_stats
-from linting import LintError, clone_repo_at_sha, lint_files
-from security_scan import SecurityScanError, scan_files
-from test_mapping import map_source_to_tests
-from test_runner import (
+from app.core.diff_stats import diff_stats
+from app.core.linting import LintError, clone_repo_at_sha, lint_files
+from app.core.security_scan import SecurityScanError, scan_files
+from app.core.test_mapping import map_source_to_tests
+from app.core.test_runner import (
     TestRunError,
     build_test_checklist,
     coverage_delta,
     get_coverage,
     run_tests,
 )
-from type_check import TypeCheckError, new_errors, type_check_files
-from risk_score import compute_risk_score
+from app.core.type_check import TypeCheckError, new_errors, type_check_files
+from app.core.risk_score import compute_risk_score
 
 
 def _checkout(repo_dir: Path, clone_url: str, sha: str):

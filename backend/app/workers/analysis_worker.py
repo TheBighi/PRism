@@ -10,7 +10,7 @@ from app.core.queue import enqueue_pr_analysis, enqueue_pr_explanation, get_queu
 
 import time
 
-from app.core.container_runner import run_analysis_in_container, LintError
+from app.core.container_runner import run_analysis_in_container
 
 async def analyze_pr(ctx, pull_request_id: int, job_id: int):
     db = SessionLocal()
@@ -40,7 +40,7 @@ async def analyze_pr(ctx, pull_request_id: int, job_id: int):
         queue = await get_queue()
 
         await enqueue_pr_explanation(queue, job_id)
-    except (Exception, LintError) as e:
+    except Exception as e:
         db.rollback()
         job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
         job.status = JobStatus.failed

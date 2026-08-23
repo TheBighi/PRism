@@ -2,8 +2,14 @@ from arq.connections import ArqRedis, RedisSettings, create_pool
 from sqlalchemy.orm import Session
 from app.models import AnalysisJob, JobStatus
 
+_queue_pool: ArqRedis | None = None
+
+
 async def get_queue() -> ArqRedis:
-    return await create_pool(RedisSettings(host="localhost", port=6379))
+    global _queue_pool
+    if _queue_pool is None:
+        _queue_pool = await create_pool(RedisSettings(host="localhost", port=6379))
+    return _queue_pool
 
 async def enqueue_pr_analysis(queue: ArqRedis, pull_request_id: int, db: Session) -> AnalysisJob:
     job = AnalysisJob(pull_request_id=pull_request_id, status=JobStatus.pending)
