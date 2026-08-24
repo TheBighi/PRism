@@ -1,9 +1,11 @@
+from datetime import datetime, timezone
+
 from app.database import SessionLocal
 from app.models import AnalysisJob, JobStatus, ExplanationStatus, PullRequest, PullRequestFile, Repository
 
+from app.schemas.explanation import PRExplanation
 from arq.connections import RedisSettings
-
-from app.core.llm import call_llm, build_explanation_prompt
+from app.core.llm import build_explanation_prompt, call_llm
 
 async def generate_explanation(ctx, job_id: int):
     db = SessionLocal()
@@ -12,13 +14,12 @@ async def generate_explanation(ctx, job_id: int):
         if not job or job.status != JobStatus.done or not job.results:
             return
         job.explanation_status = ExplanationStatus.running
+        job.started_at = datetime.now(timezone.utc)
         db.commit()
-
         prompt = build_explanation_prompt(job.results)  # truncate/select top findings by risk_score
-        job.explanation = await call_llm(prompt)
-
-        print("Generating explanation for job_id:", job_id)
+        job.explanation = (await call_llm(prompt, PRExplanation)).model_dump(mode="json")
         job.explanation_status = ExplanationStatus.done
+        job.explanation_finished_at = datetime.now(timezone.utc)
         db.commit()
     except Exception as e:
         db.rollback()

@@ -1,6 +1,13 @@
 import json
+import logging
 from typing import Any
 
+from google import genai
+from google.genai import types
+
+from pydantic import BaseModel, ValidationError
+
+from app.settings.config import get_settings
 
 def build_explanation_prompt(results: list[dict[str, Any]]) -> str:
     findings = []
@@ -117,3 +124,68 @@ PR ANALYSIS EVIDENCE:
     default=str
 )}
 """.strip()
+
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+client = genai.Client(api_key=settings.gemini_api_key)
+
+
+def _strict_schema(schema: Any) -> Any:
+    """Convert a pydantic JSON schema into an OpenAI strict-mode compatible schema."""
+    if isinstance(schema, list):
+        return [_strict_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+
+    result = {
+        key: _strict_schema(value)
+        for key, value in schema.items()
+        if key != "default"
+    }
+
+    if "properties" in result:
+        result["required"] = list(result["properties"])
+        result["additionalProperties"] = False
+    return result
+
+
+async def call_llm[T: BaseModel](
+    prompt: str,
+    response_model: type[T],
+    *,
+    max_retries: int = 2,
+) -> T:
+    """Call Gemini and parse the response into response_model."""
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.aio.models.generate_content(
+                model=settings.gemini_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=response_model,
+                    temperature=0,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                ),
+            )
+            # response.parsed is already validated by the SDK when it succeeds
+            if response.parsed is not None:
+                return response.parsed
+            # fallback: validate the raw text ourselves
+            return response_model.model_validate_json(response.text)
+
+        except (ValidationError, ValueError) as e:
+            last_error = e
+            logger.warning(
+                "call_llm attempt %d/%d failed: %s",
+                attempt + 1, max_retries + 1, e,
+            )
+
+    raise RuntimeError(
+        f"LLM call failed to produce valid {response_model.__name__} "
+        f"after {max_retries + 1} attempts"
+    ) from last_error
