@@ -7,7 +7,7 @@ from google.genai import types
 
 from pydantic import BaseModel, ValidationError
 
-from app.settings.config import get_settings
+from app.config.config import get_settings
 
 def build_explanation_prompt(results: list[dict[str, Any]]) -> str:
     findings = []

@@ -6,6 +6,7 @@ from app.models import AnalysisJob, JobStatus, ExplanationStatus, PullRequest, P
 from app.schemas.explanation import PRExplanation
 from arq.connections import RedisSettings
 from app.core.llm import build_explanation_prompt, call_llm
+from app.core.github import format_check_output, post_pr_check
 
 async def generate_explanation(ctx, job_id: int):
     db = SessionLocal()
@@ -21,6 +22,20 @@ async def generate_explanation(ctx, job_id: int):
         job.explanation_status = ExplanationStatus.done
         job.explanation_finished_at = datetime.now(timezone.utc)
         db.commit()
+        
+        pr = db.query(PullRequest).filter(PullRequest.id == job.pull_request_id).first()
+        repo = db.query(Repository).filter(Repository.id == pr.repository_id).first()
+        if repo and repo.installation_id:
+            title, summary, results_text = format_check_output(job.explanation)
+            await post_pr_check(
+                installation_id=repo.installation_id,
+                owner=repo.owner,
+                repo=repo.name,
+                sha=pr.head_sha,
+                title=title,
+                summary=summary,
+                results=results_text,
+            )
     except Exception as e:
         db.rollback()
         job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()

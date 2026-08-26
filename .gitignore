@@ -28,3 +28,6 @@ __pycache__/
 .env
 
 TEST_REPO
+
+private-key.pem
+.ruff_cache
