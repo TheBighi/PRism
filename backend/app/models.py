@@ -15,6 +15,7 @@ class Repository(Base):
     name = Column(Text, nullable=False)
     full_name = Column(Text, nullable=False)
     default_branch = Column(Text)
+    installation_id = Column(BigInteger, nullable=True)
     url = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

@@ -51,6 +51,7 @@ def parse_github_timestamp(ts):
 def store_pull_request(payload, db: Session):
     repo_data = payload["repository"]
     pr_data = payload["pull_request"]
+    installation_id = payload.get("installation", {}).get("id")
 
     repo = db.query(Repository).filter(Repository.github_id == repo_data["id"]).first()
     if not repo:
@@ -61,9 +62,13 @@ def store_pull_request(payload, db: Session):
             full_name=repo_data["full_name"],
             default_branch=repo_data.get("default_branch"),
             url=repo_data["html_url"],
+            installation_id=installation_id,
         )
         db.add(repo)
         db.flush()
+
+    elif installation_id is not None:
+        repo.installation_id = installation_id
 
     existing = db.query(PullRequest).filter(PullRequest.github_id == pr_data["id"]).first()
     if existing:
