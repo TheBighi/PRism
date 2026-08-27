@@ -26,7 +26,7 @@ async def generate_explanation(ctx, job_id: int):
         pr = db.query(PullRequest).filter(PullRequest.id == job.pull_request_id).first()
         repo = db.query(Repository).filter(Repository.id == pr.repository_id).first()
         if repo and repo.installation_id:
-            title, summary, results_text = format_check_output(job.explanation)
+            title, summary, results, conclusion = format_check_output(job.explanation)
             await post_pr_check(
                 installation_id=repo.installation_id,
                 owner=repo.owner,
@@ -34,7 +34,8 @@ async def generate_explanation(ctx, job_id: int):
                 sha=pr.head_sha,
                 title=title,
                 summary=summary,
-                results=results_text,
+                results=results,
+                conclusion=conclusion,
             )
     except Exception as e:
         db.rollback()
@@ -51,6 +52,6 @@ class WorkerSettings:
     functions = [generate_explanation]
     queue_name = "explain:queue"
     max_jobs = 20
-    job_timeout = 60
+    job_timeout = 180
     max_tries = 3
     redis_settings = RedisSettings(host="localhost", port=6379)

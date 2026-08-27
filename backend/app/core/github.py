@@ -48,6 +48,7 @@ async def create_check(
     title: str,
     summary: str,
     results: str,
+    conclusion: str,
 ):
     headers = {
         "Authorization": f"Bearer {token}",
@@ -57,7 +58,7 @@ async def create_check(
         "name": "PRism",
         "head_sha": sha,
         "status": "completed",
-        "conclusion": "success",
+        "conclusion": conclusion,
         "output": {
             "title": title,
             "summary": summary,
@@ -83,6 +84,7 @@ async def post_pr_check(
     title: str,
     summary: str,
     results: str,
+    conclusion: str,
 ):
     token = await get_installation_token(installation_id)
     return await create_check(
@@ -93,16 +95,19 @@ async def post_pr_check(
         title=title,
         summary=summary,
         results=results,
+        conclusion=conclusion,
     )
 
-def format_check_output(explanation: dict) -> tuple[str, str, str]:
+
+def format_check_output(explanation: dict) -> tuple[str, str, str, str]:
     title = "PRism Analysis"
     summary = explanation.get("summary", "")
-
     top_risks = explanation.get("top_risks", [])
+
     by_severity: dict[str, list[dict]] = {}
     for risk in top_risks:
-        by_severity.setdefault(risk["severity"], []).append(risk)
+        severity = risk.get("severity", "medium")
+        by_severity.setdefault(severity, []).append(risk)
 
     lines = []
     for severity in ("critical", "high", "medium", "low"):
@@ -110,18 +115,30 @@ def format_check_output(explanation: dict) -> tuple[str, str, str]:
         if not risks:
             continue
         lines.append(f"## {severity.title()} Risk")
-        for r in risks:
-            files = f" ({', '.join(r['files'])})" if r.get("files") else ""
-            lines.append(f"- {r['title']}{files}: {r['explanation']}")
+        for risk in risks:
+            files = f" ({', '.join(risk['files'])})" if risk.get("files") else ""
+            lines.append(f"- {risk['title']}{files}: {risk['explanation']}")
 
-    recommendation = explanation.get("recommendation")
-    if recommendation:
+    recommendation = explanation.get("recommendation", {})
+    priority = recommendation.get("priority", "review")
+
+    if recommendation.get("summary") or recommendation.get("actions"):
         lines.append("")
-        lines.append(f"## Recommendation: {recommendation['priority'].replace('_', ' ').title()}")
+        lines.append(f"## Recommendation: {priority.replace('_', ' ').title()}")
         if recommendation.get("summary"):
             lines.append(recommendation["summary"])
         for action in recommendation.get("actions", []):
             lines.append(f"- {action}")
 
     results_text = "\n".join(lines) if lines else "No issues found."
-    return title, summary, results_text
+
+    priority_to_conclusion = {
+        "block": "failure",
+        "changes_requested": "failure",
+        "review": "neutral",
+        "approve": "success",
+    }
+    conclusion = priority_to_conclusion.get(priority, "neutral")
+
+    return (title, summary, results_text, conclusion)
+
