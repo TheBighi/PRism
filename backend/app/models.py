@@ -17,6 +17,7 @@ class Repository(Base):
     default_branch = Column(Text)
     installation_id = Column(BigInteger, nullable=True)
     url = Column(Text)
+    history_last_synced_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -98,3 +99,47 @@ class AnalysisJob(Base):
     explanation_error = Column(Text, nullable=True)
     explanation_started_at = Column(DateTime(timezone=True), nullable=True)
     explanation_finished_at = Column(DateTime(timezone=True), nullable=True)
+
+class Commit(Base):
+    __tablename__ = "commits"
+
+    id = Column(Integer, primary_key=True)
+
+    repository_id = Column(
+        ForeignKey("repositories.id"),
+        index=True,
+    )
+
+    sha = Column(String, unique=True, index=True)
+
+    author_login = Column(String, nullable=True)
+
+    committed_at = Column(DateTime(timezone=True), index=True)
+
+    message = Column(Text)
+
+    additions = Column(Integer, default=0)
+    deletions = Column(Integer, default=0)
+
+    is_revert = Column(Boolean, default=False)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class CommitFile(Base):
+    __tablename__ = "commit_files"
+
+    id = Column(Integer, primary_key=True)
+    commit_id = Column(ForeignKey("commits.id", ondelete="CASCADE"), index=True)
+    filename = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False)
+    additions = Column(Integer, nullable=False, default=0)
+    deletions = Column(Integer, nullable=False, default=0)
+    changes = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("commit_id", "filename", name="uq_commit_file"),
+    )
