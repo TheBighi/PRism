@@ -24,3 +24,7 @@ async def enqueue_pr_explanation(queue: ArqRedis, job_id: int) -> None:
     await queue.enqueue_job("generate_explanation", job_id, _queue_name="explain:queue")
 
     return None
+
+
+async def enqueue_sync_history(queue: ArqRedis, repository_id: int) -> None:
+    await queue.enqueue_job("sync_history", repository_id, _queue_name="history:queue")

@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from app.database import get_db, engine, Base
 from app.models import Repository, PullRequest, PullRequestFile, AnalysisJob
 
-from app.core.queue import enqueue_pr_analysis, get_queue
+from app.core.queue import enqueue_pr_analysis, enqueue_sync_history, get_queue
 
 Base.metadata.create_all(bind=engine)
 
@@ -54,6 +54,7 @@ def store_pull_request(payload, db: Session):
     installation_id = payload.get("installation", {}).get("id")
 
     repo = db.query(Repository).filter(Repository.github_id == repo_data["id"]).first()
+    new_repo = False
     if not repo:
         repo = Repository(
             github_id=repo_data["id"],
@@ -66,6 +67,7 @@ def store_pull_request(payload, db: Session):
         )
         db.add(repo)
         db.flush()
+        new_repo = True
 
     elif installation_id is not None:
         repo.installation_id = installation_id
@@ -109,7 +111,7 @@ def store_pull_request(payload, db: Session):
 
     db.commit()
 
-    return pr
+    return pr, repo.id, new_repo
 
 
 def store_pr_files(pr, pr_data, repo_data, db: Session):
@@ -182,13 +184,14 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     if event_type == "pull_request":
         action = payload.get("action")
         if action in ("opened", "synchronize", "reopened"):
-            # store_pull_request does blocking DB + GitHub API work; run it on
-            # a worker thread so the event loop stays free.
-            pr = await run_in_threadpool(store_pull_request, payload, db)
+            pr, repo_id, new_repo = await run_in_threadpool(store_pull_request, payload, db)
 
             queue = await get_queue()
 
             await enqueue_pr_analysis(queue, pr.id, db)
+
+            if new_repo:
+                await enqueue_sync_history(queue, repo_id)
 
             return JSONResponse(status_code=202, content={"ok": True})
 
