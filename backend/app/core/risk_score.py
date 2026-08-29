@@ -12,14 +12,13 @@ Inputs consumed (all already exist in the pipeline):
   - coverage_delta: per-file head/base/delta coverage
 """
 
-from pathlib import Path
-
 WEIGHTS = {
     "sensitive_file": 20,
     "diff_size": 15,
     "dependency_change": 10,
-    "static_analysis": 35,
-    "coverage_decrease": 20,
+    "static_analysis": 25,
+    "coverage_decrease": 15,
+    "historical_risk": 15,
 }
 assert sum(WEIGHTS.values()) == 100
 
@@ -97,6 +96,22 @@ def _coverage_decrease_score(coverage: dict) -> dict:
     return {"score": score, "worst_decrease": round(worst, 2), "file": worst_file}
 
 
+def _historical_risk_score(grouped_results: list[dict]) -> dict:
+    historical = next((g for g in grouped_results if g.get("type") == "historical_risk"), None)
+    files = historical.get("files", {}) if historical else {}
+    if not files:
+        return {"score": 0.0, "files": {}, "note": "no history data yet"}
+
+    worst = 0.0
+    worst_file = None
+    for filename, entry in files.items():
+        s = entry.get("risk_score", 0) / 100.0
+        if s > worst:
+            worst, worst_file = s, filename
+
+    return {"score": worst, "worst_file": worst_file, "files": files}
+
+
 # --- Entry point -------------------------------------------------------
 
 def compute_risk_score(analysis_output: list[dict], filenames: list[str]) -> dict:
@@ -124,6 +139,7 @@ def compute_risk_score(analysis_output: list[dict], filenames: list[str]) -> dic
         "dependency_change": _dependency_score(analysis_output),
         "static_analysis": _static_analysis_score(analysis_output),
         "coverage_decrease": _coverage_decrease_score(coverage),
+        "historical_risk": _historical_risk_score(analysis_output),
     }
 
     breakdown = {}
