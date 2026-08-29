@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from dotenv import load_dotenv
+from sqlalchemy import func
 
 load_dotenv()
 
@@ -9,7 +10,7 @@ from arq.connections import RedisSettings
 
 from app.core.github import get_installation_token
 from app.database import SessionLocal
-from app.models import Commit, CommitFile, Repository
+from app.models import Commit, CommitFile, FileRiskSummary, Repository
 
 GITHUB_API_URL = "https://api.github.com"
 
@@ -54,6 +55,52 @@ async def _fetch_commit_detail(token: str, owner: str, repo: str, sha: str) -> d
 
 def _is_revert(message: str) -> bool:
     return message.startswith("Revert") and "This reverts commit" in message
+
+
+COMMIT_COUNT_CAP = 20
+REVERT_RATIO_CAP = 0.4
+
+
+def compute_file_risk_scores(db, repository_id: int):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+
+    revert_count_col = func.count(Commit.id).filter(Commit.is_revert == True)
+
+    rows = (
+        db.query(
+            CommitFile.filename,
+            func.count(Commit.id).label("commit_count"),
+            revert_count_col.label("revert_count"),
+        )
+        .join(Commit, CommitFile.commit_id == Commit.id)
+        .filter(Commit.repository_id == repository_id)
+        .filter(Commit.committed_at >= cutoff)
+        .group_by(CommitFile.filename)
+        .all()
+    )
+
+    db.query(FileRiskSummary).filter(FileRiskSummary.repository_id == repository_id).delete()
+
+    for filename, commit_count, revert_count in rows:
+        commit_count = int(commit_count)
+        revert_count = int(revert_count)
+
+        freq_score = min(commit_count / COMMIT_COUNT_CAP, 1.0)
+        revert_ratio = revert_count / commit_count if commit_count > 0 else 0.0
+        revert_score = min(revert_ratio / REVERT_RATIO_CAP, 1.0)
+
+        risk_score = int(round((freq_score * 0.6 + revert_score * 0.4) * 100))
+
+        db.add(FileRiskSummary(
+            repository_id=repository_id,
+            filename=filename,
+            commit_count_90d=commit_count,
+            revert_count_90d=revert_count,
+            risk_score=risk_score,
+            computed_at=datetime.now(timezone.utc),
+        ))
+
+    db.flush()
 
 
 async def sync_history(ctx, repository_id: int):
@@ -120,6 +167,10 @@ async def sync_history(ctx, repository_id: int):
             commit.deletions = total_deletions
 
         repo.history_last_synced_at = datetime.now(timezone.utc)
+        db.flush()
+
+        compute_file_risk_scores(db, repository_id)
+
         db.commit()
     except Exception:
         db.rollback()

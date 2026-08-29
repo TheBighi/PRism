@@ -143,3 +143,19 @@ class CommitFile(Base):
     __table_args__ = (
         UniqueConstraint("commit_id", "filename", name="uq_commit_file"),
     )
+
+
+class FileRiskSummary(Base):
+    __tablename__ = "file_risk_summaries"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    repository_id = Column(BigInteger, ForeignKey("repositories.id"), nullable=False, index=True)
+    filename = Column(Text, nullable=False)
+    commit_count_90d = Column(Integer, nullable=False, default=0)
+    revert_count_90d = Column(Integer, nullable=False, default=0)
+    risk_score = Column(Integer, nullable=False, default=0)
+    computed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("repository_id", "filename", name="uq_repo_file_risk"),
+    )

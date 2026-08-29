@@ -17,6 +17,7 @@ def build_explanation_prompt(results: list[dict[str, Any]]) -> str:
     coverage = None
     diff_stats = None
     risk_score = None
+    hotspot_files = None
 
     for result in results:
         result_type = result.get("type")
@@ -52,6 +53,9 @@ def build_explanation_prompt(results: list[dict[str, Any]]) -> str:
         elif result_type == "risk_score":
             risk_score = result
 
+        elif result_type == "hotspot_files":
+            hotspot_files = result.get("files")
+
     evidence = {
         "findings": findings,
         "dependencies": dependencies,
@@ -60,6 +64,7 @@ def build_explanation_prompt(results: list[dict[str, Any]]) -> str:
         "coverage": coverage,
         "diff_stats": diff_stats,
         "risk_score": risk_score,
+        "hotspot_files": hotspot_files,
     }
 
     return f"""
@@ -79,6 +84,7 @@ Rules:
 - Security findings should be prioritized when they represent meaningful risk.
 - Minor style or lint findings should not dominate the explanation.
 - Use the provided evidence when explaining each risk.
+- Files marked as hotspot_files have high historical commit activity and/or revert rates. Prioritize these when they appear in findings.
 - Keep the response concise and technically precise.
 
 Return a JSON object matching the required output schema.
