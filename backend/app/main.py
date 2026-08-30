@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -15,10 +16,21 @@ from app.database import get_db, engine, Base
 from app.models import Repository, PullRequest, PullRequestFile, AnalysisJob
 
 from app.core.queue import enqueue_pr_analysis, enqueue_sync_history, get_queue
+from app.routers.repos import router as repos_router
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(repos_router)
 
 load_dotenv()
 
