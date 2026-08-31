@@ -71,26 +71,70 @@ export interface AnalysisJob {
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
-  results: AnalysisResults | null;
+  results: AnalysisResult[] | null;
   explanation: Explanation | null;
   explanation_status: string | null;
 }
 
-export interface AnalysisResults {
-  total: number;
-  breakdown: Record<string, {
-    weight: number;
-    contribution: number;
-    score: number;
-    matched_files?: string[];
-  }>;
-  lint?: unknown;
-  security?: unknown;
-  type_check?: unknown;
-  dependency_diff?: unknown;
-  test_results?: unknown;
-  coverage?: unknown;
-  diff_stats?: unknown;
+export interface AnalysisResult {
+  type: string;
+  results?: AnalysisFinding[];
+  stats?: DiffStat[];
+  coverage?: Record<string, CoverageEntry>;
+  files?: Record<string, HistoricalRisk>;
+  total?: number;
+  breakdown?: Record<string, RiskBreakdownItem>;
+}
+
+export interface AnalysisFinding {
+  filename?: string;
+  line?: number;
+  col?: number;
+  severity: string;
+  message: string;
+  code?: string;
+  symbol?: string;
+  suggestion?: string;
+}
+
+export interface DiffStat {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+}
+
+export interface CoverageEntry {
+  head?: number;
+  base?: number;
+  delta?: number;
+}
+
+export interface HistoricalRisk {
+  commit_count_90d: number;
+  revert_count_90d: number;
+  risk_score: number;
+}
+
+export interface RiskBreakdownItem {
+  weight: number;
+  contribution: number;
+  score: number;
+  matched_files?: string[];
+  total_changes?: number;
+  files_changed?: number;
+  changes?: string[];
+  weighted_total?: number;
+  counts?: Record<string, number>;
+  security_findings?: number;
+  worst_decrease?: number;
+  file?: string;
+  worst_file?: string;
+  failed?: number;
+  passed?: number;
+  total?: number;
+  failed_tests?: string[];
 }
 
 export interface Explanation {
@@ -109,9 +153,9 @@ export interface RiskItem {
   severity: string;
   category: string;
   explanation: string;
-  evidence: string;
+  evidence: string[];
   files: string[];
-  lines: string[];
+  lines: number[];
 }
 
 export interface HotspotFile {

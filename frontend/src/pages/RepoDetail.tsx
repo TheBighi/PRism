@@ -1,11 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import {
-  fetchRepo,
-  fetchRepoHealth,
-  fetchRepoPRs,
-  fetchHotspots,
-} from "../api";
+import { fetchRepoDetail } from "../api";
 import type { RepoSummary, RepoHealth, PRSummary, HotspotFile } from "../types";
 import Loading from "../components/Loading";
 import ErrorDisplay from "../components/ErrorDisplay";
@@ -13,32 +8,24 @@ import HealthCard from "../components/HealthCard";
 import StatCard from "../components/StatCard";
 import RiskBar from "../components/RiskBar";
 
+interface RepoDetailData {
+  repo: RepoSummary;
+  health: RepoHealth;
+  pull_requests: PRSummary[];
+  hotspots: HotspotFile[];
+}
+
 export default function RepoDetail() {
   const { repoId } = useParams<{ repoId: string }>();
-  const [repo, setRepo] = useState<RepoSummary | null>(null);
-  const [health, setHealth] = useState<RepoHealth | null>(null);
-  const [prs, setPrs] = useState<PRSummary[]>([]);
-  const [hotspots, setHotspots] = useState<HotspotFile[]>([]);
+  const [data, setData] = useState<RepoDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"prs" | "hotspots">("prs");
 
   useEffect(() => {
     if (!repoId) return;
-    const id = parseInt(repoId, 10);
-
-    Promise.all([
-      fetchRepo(id),
-      fetchRepoHealth(id),
-      fetchRepoPRs(id),
-      fetchHotspots(id),
-    ])
-      .then(([repoData, healthData, prsData, hotspotsData]) => {
-        setRepo(repoData);
-        setHealth(healthData);
-        setPrs(prsData);
-        setHotspots(hotspotsData);
-      })
+    fetchRepoDetail(parseInt(repoId, 10))
+      .then(setData)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [repoId]);
@@ -52,7 +39,7 @@ export default function RepoDetail() {
       <ErrorDisplay message={error} />
     </div>
   );
-  if (!repo || !health) return (
+  if (!data) return (
     <div className="page">
       <div className="page-header">
         <Link to="/" className="back-link">&larr; All Repos</Link>
@@ -61,6 +48,7 @@ export default function RepoDetail() {
     </div>
   );
 
+  const { repo, health, pull_requests: prs, hotspots } = data;
   const openPRs = prs.filter((p) => p.state === "open");
   const closedPRs = prs.filter((p) => p.state !== "open");
 
