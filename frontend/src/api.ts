@@ -17,46 +17,64 @@ api.interceptors.response.use(
     if (err.response) {
       const status = err.response.status;
       const detail = err.response.data?.detail;
-      if (status === 404) {
-        throw new Error(detail || "Not found");
-      }
+      if (status === 404) throw new Error(detail || "Not found");
       throw new Error(detail || `Server error (${status})`);
     }
     throw new Error("Network error - is the backend running?");
   }
 );
 
+// Simple in-memory cache
+const cache = new Map<string, { data: unknown; ts: number }>();
+const CACHE_TTL = 30_000;
+
+function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.ts < CACHE_TTL) return Promise.resolve(hit.data as T);
+  return fn().then((data) => {
+    cache.set(key, { data, ts: Date.now() });
+    return data;
+  });
+}
+
+export function invalidateCache(prefix?: string) {
+  if (!prefix) { cache.clear(); return; }
+  for (const k of cache.keys()) { if (k.startsWith(prefix)) cache.delete(k); }
+}
+
 export async function fetchRepos(): Promise<RepoSummary[]> {
-  const { data } = await api.get<RepoSummary[]>("/repos");
-  return data;
+  return cached("repos", () => api.get<RepoSummary[]>("/repos").then((r) => r.data));
 }
 
 export async function fetchRepo(repoId: number): Promise<RepoSummary> {
-  const { data } = await api.get<RepoSummary>(`/repos/${repoId}`);
-  return data;
+  return cached(`repo:${repoId}`, () => api.get<RepoSummary>(`/repos/${repoId}`).then((r) => r.data));
 }
 
 export async function fetchRepoHealth(repoId: number): Promise<RepoHealth> {
-  const { data } = await api.get<RepoHealth>(`/repos/${repoId}/health`);
-  return data;
+  return cached(`health:${repoId}`, () => api.get<RepoHealth>(`/repos/${repoId}/health`).then((r) => r.data));
 }
 
 export async function fetchRepoPRs(repoId: number): Promise<PRSummary[]> {
-  const { data } = await api.get<PRSummary[]>(`/repos/${repoId}/pull-requests`);
-  return data;
+  return cached(`prs:${repoId}`, () => api.get<PRSummary[]>(`/repos/${repoId}/pull-requests`).then((r) => r.data));
+}
+
+export async function fetchRepoDetail(repoId: number) {
+  return cached(`detail:${repoId}`, () =>
+    api.get(`/repos/${repoId}/detail`).then((r) => r.data)
+  );
 }
 
 export async function fetchPRDetail(
   repoId: number,
   prNumber: number
 ): Promise<PRDetail> {
-  const { data } = await api.get<PRDetail>(
-    `/repos/${repoId}/pull-requests/${prNumber}`
+  return cached(`pr:${repoId}:${prNumber}`, () =>
+    api.get<PRDetail>(`/repos/${repoId}/pull-requests/${prNumber}`).then((r) => r.data)
   );
-  return data;
 }
 
 export async function fetchHotspots(repoId: number): Promise<HotspotFile[]> {
-  const { data } = await api.get<HotspotFile[]>(`/repos/${repoId}/hotspots`);
-  return data;
+  return cached(`hotspots:${repoId}`, () =>
+    api.get<HotspotFile[]>(`/repos/${repoId}/hotspots`).then((r) => r.data)
+  );
 }
