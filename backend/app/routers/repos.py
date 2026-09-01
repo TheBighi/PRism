@@ -3,12 +3,27 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
+from app.auth import AuthContext, get_current_user, github_repository_ids
 from app.models import (
     Repository, PullRequest, PullRequestFile,
     AnalysisJob, FileRiskSummary, JobStatus, ExplanationStatus,
 )
 
 router = APIRouter(prefix="/api", tags=["repos"])
+
+
+async def require_repo_access(
+    repo_id: int,
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_current_user),
+) -> Repository:
+    repo = db.query(Repository).filter(Repository.id == repo_id).first()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if repo.github_id not in await github_repository_ids(auth):
+        # Do not reveal whether a tracked private repository exists.
+        raise HTTPException(status_code=404, detail="Repository not found")
+    return repo
 
 
 def _repo_summary(repo: Repository, pr_count: int, open_pr_count: int,
@@ -58,17 +73,63 @@ def _get_repo_stats(repo_id: int, db: Session):
 
 
 @router.get("/repos")
-def list_repos(db: Session = Depends(get_db)):
-    repos = db.query(Repository).order_by(Repository.created_at.desc()).all()
+async def list_repos(
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_current_user),
+):
+    allowed_ids = await github_repository_ids(auth)
+    if not allowed_ids:
+        return []
+
+    repos = db.query(Repository).filter(
+        Repository.github_id.in_(allowed_ids)
+    ).order_by(Repository.created_at.desc()).all()
+
+    repo_db_ids = [r.id for r in repos]
+
+    # Bulk query PR counts (total + open) per repo
+    pr_stats_rows = db.query(
+        PullRequest.repository_id,
+        func.count(PullRequest.id),
+        func.count(PullRequest.id).filter(PullRequest.state == "open"),
+    ).filter(
+        PullRequest.repository_id.in_(repo_db_ids)
+    ).group_by(PullRequest.repository_id).all()
+    pr_stats_map = {row[0]: (row[1], row[2]) for row in pr_stats_rows}
+
+    # Bulk query average risk score per repo
+    risk_rows = db.query(
+        PullRequest.repository_id,
+        func.avg(AnalysisJob.results["total"].as_float()),
+    ).join(PullRequest, PullRequest.id == AnalysisJob.pull_request_id).filter(
+        PullRequest.repository_id.in_(repo_db_ids),
+        AnalysisJob.status == JobStatus.done,
+        AnalysisJob.results.isnot(None),
+    ).group_by(PullRequest.repository_id).all()
+    risk_map = {row[0]: row[1] for row in risk_rows}
+
+    # Bulk query hotspot count per repo
+    hotspot_rows = db.query(
+        FileRiskSummary.repository_id,
+        func.count(FileRiskSummary.id),
+    ).filter(
+        FileRiskSummary.repository_id.in_(repo_db_ids),
+        FileRiskSummary.risk_score >= 60,
+    ).group_by(FileRiskSummary.repository_id).all()
+    hotspot_map = {row[0]: row[1] for row in hotspot_rows}
+
     result = []
     for r in repos:
-        pr_count, open_pr, avg_risk, health, hot = _get_repo_stats(r.id, db)
-        result.append(_repo_summary(r, pr_count, open_pr, avg_risk, health, hot))
+        pr_count, open_pr = pr_stats_map.get(r.id, (0, 0))
+        avg_risk = risk_map.get(r.id)
+        health_score = max(0, min(100, 100 - int(avg_risk))) if avg_risk is not None else 100
+        hotspot_count = hotspot_map.get(r.id, 0)
+        result.append(_repo_summary(r, pr_count, open_pr, avg_risk, health_score, hotspot_count))
     return result
 
 
 @router.get("/repos/{repo_id}")
-def get_repo(repo_id: int, db: Session = Depends(get_db)):
+def get_repo(repo_id: int, db: Session = Depends(get_db), _access: Repository = Depends(require_repo_access)):
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
@@ -77,7 +138,7 @@ def get_repo(repo_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/repos/{repo_id}/health")
-def get_repo_health(repo_id: int, db: Session = Depends(get_db)):
+def get_repo_health(repo_id: int, db: Session = Depends(get_db), _access: Repository = Depends(require_repo_access)):
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
@@ -127,7 +188,7 @@ def get_repo_health(repo_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/repos/{repo_id}/pull-requests")
-def list_pull_requests(repo_id: int, db: Session = Depends(get_db)):
+def list_pull_requests(repo_id: int, db: Session = Depends(get_db), _access: Repository = Depends(require_repo_access)):
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
@@ -197,7 +258,7 @@ def list_pull_requests(repo_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/repos/{repo_id}/pull-requests/{pr_number}")
-def get_pull_request(repo_id: int, pr_number: int, db: Session = Depends(get_db)):
+def get_pull_request(repo_id: int, pr_number: int, db: Session = Depends(get_db), _access: Repository = Depends(require_repo_access)):
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
@@ -256,7 +317,7 @@ def get_pull_request(repo_id: int, pr_number: int, db: Session = Depends(get_db)
 
 
 @router.get("/repos/{repo_id}/hotspots")
-def get_hotspots(repo_id: int, db: Session = Depends(get_db)):
+def get_hotspots(repo_id: int, db: Session = Depends(get_db), _access: Repository = Depends(require_repo_access)):
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
@@ -277,7 +338,7 @@ def get_hotspots(repo_id: int, db: Session = Depends(get_db)):
 # --- Merged endpoint: single call for entire repo detail page ---
 
 @router.get("/repos/{repo_id}/detail")
-def get_repo_detail(repo_id: int, db: Session = Depends(get_db)):
+def get_repo_detail(repo_id: int, db: Session = Depends(get_db), _access: Repository = Depends(require_repo_access)):
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
