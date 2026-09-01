@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -14,13 +15,22 @@ from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db, engine, Base
 from app.models import Repository, PullRequest, PullRequestFile, AnalysisJob
+from app.auth import AuthContext, get_current_user, router as auth_router, github_repository_ids, get_http_client, close_http_client
 
 from app.core.queue import enqueue_pr_analysis, enqueue_sync_history, get_queue
 from app.routers.repos import router as repos_router
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await get_http_client()
+    yield
+    await close_http_client()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,6 +41,7 @@ app.add_middleware(
 )
 
 app.include_router(repos_router)
+app.include_router(auth_router)
 
 load_dotenv()
 
@@ -210,9 +221,18 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     return {"ok": True}
 
 @app.get("/jobs/{job_id}")
-def get_job_status(job_id: int, db: Session = Depends(get_db)):
+async def get_job_status(
+    job_id: int,
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_current_user),
+):
     job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
     if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    repo = db.query(Repository).join(
+        PullRequest, PullRequest.repository_id == Repository.id
+    ).filter(PullRequest.id == job.pull_request_id).first()
+    if not repo or repo.github_id not in await github_repository_ids(auth):
         raise HTTPException(status_code=404, detail="Job not found")
     return {
         "id": job.id,

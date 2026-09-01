@@ -44,7 +44,7 @@ async def generate_explanation(ctx, job_id: int):
             job.explanation_status = ExplanationStatus.failed
             job.explanation_error = str(e)
             db.commit()
-        raise
+        raise RuntimeError(f"generate_explanation failed: {e}") from None
     finally:
         db.close()
 

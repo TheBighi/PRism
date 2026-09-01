@@ -9,6 +9,7 @@ import type {
 
 const api = axios.create({
   baseURL: "/api",
+  withCredentials: true,
 });
 
 api.interceptors.response.use(
@@ -17,6 +18,7 @@ api.interceptors.response.use(
     if (err.response) {
       const status = err.response.status;
       const detail = err.response.data?.detail;
+      if (status === 401) throw new Error(detail || "Authentication required");
       if (status === 404) throw new Error(detail || "Not found");
       throw new Error(detail || `Server error (${status})`);
     }
@@ -40,6 +42,30 @@ function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
 export function invalidateCache(prefix?: string) {
   if (!prefix) { cache.clear(); return; }
   for (const k of cache.keys()) { if (k.startsWith(prefix)) cache.delete(k); }
+}
+
+export interface CurrentUser {
+  id: number;
+  github_id: number;
+  login: string;
+  avatar_url: string | null;
+}
+
+export async function fetchCurrentUser(): Promise<CurrentUser | null> {
+  try {
+    return await api.get<CurrentUser>("/auth/me").then((r) => r.data);
+  } catch (error) {
+    if (error instanceof Error && [
+      "Authentication required", "Sign in with GitHub to continue",
+      "Your session has expired", "Your session is invalid",
+    ].includes(error.message)) return null;
+    throw error;
+  }
+}
+
+export async function logout(): Promise<void> {
+  await api.post("/auth/logout");
+  invalidateCache();
 }
 
 export async function fetchRepos(): Promise<RepoSummary[]> {
