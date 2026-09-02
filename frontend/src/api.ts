@@ -12,13 +12,39 @@ const api = axios.create({
   withCredentials: true,
 });
 
+export class AuthenticationError extends Error {}
+
+let unauthorizedHandler: (() => void) | null = null;
+let logoutRequest: Promise<unknown> | null = null;
+
+export function onUnauthorized(handler: () => void): () => void {
+  unauthorizedHandler = handler;
+  return () => {
+    if (unauthorizedHandler === handler) unauthorizedHandler = null;
+  };
+}
+
+function expireSession() {
+  invalidateCache();
+  unauthorizedHandler?.();
+
+  if (!logoutRequest) {
+    logoutRequest = axios.post("/api/auth/logout", undefined, { withCredentials: true })
+      .catch(() => undefined)
+      .finally(() => { logoutRequest = null; });
+  }
+}
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response) {
       const status = err.response.status;
       const detail = err.response.data?.detail;
-      if (status === 401) throw new Error(detail || "Authentication required");
+      if (status === 401) {
+        expireSession();
+        throw new AuthenticationError(detail || "Authentication required");
+      }
       if (status === 404) throw new Error(detail || "Not found");
       throw new Error(detail || `Server error (${status})`);
     }
@@ -55,10 +81,7 @@ export async function fetchCurrentUser(): Promise<CurrentUser | null> {
   try {
     return await api.get<CurrentUser>("/auth/me").then((r) => r.data);
   } catch (error) {
-    if (error instanceof Error && [
-      "Authentication required", "Sign in with GitHub to continue",
-      "Your session has expired", "Your session is invalid",
-    ].includes(error.message)) return null;
+    if (error instanceof AuthenticationError) return null;
     throw error;
   }
 }
