@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Layout from "./components/Layout";
 import Loading from "./components/Loading";
 import ErrorDisplay from "./components/ErrorDisplay";
-import { fetchCurrentUser, logout, type CurrentUser } from "./api";
+import { fetchCurrentUser, logout, onUnauthorized, type CurrentUser } from "./api";
 import ReposList from "./pages/ReposList";
 import RepoDetail from "./pages/RepoDetail";
 import PRDetail from "./pages/PRDetail";
@@ -14,7 +14,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const unsubscribe = onUnauthorized(() => {
+      setError(null);
+      setUser(null);
+    });
     fetchCurrentUser().then(setUser).catch((err) => setError(err.message)).finally(() => setLoading(false));
+    return unsubscribe;
   }, []);
 
   if (loading) return <Loading text="Checking GitHub session..." />;
