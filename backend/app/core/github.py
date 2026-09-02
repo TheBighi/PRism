@@ -3,6 +3,9 @@ import time
 
 import httpx
 import jwt
+from dotenv import load_dotenv
+
+load_dotenv()
 
 GITHUB_APP_ID = os.environ["GITHUB_APP_ID"]
 GITHUB_PRIVATE_KEY_PATH = os.environ["GITHUB_PRIVATE_KEY_PATH"]
