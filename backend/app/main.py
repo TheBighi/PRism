@@ -181,6 +181,8 @@ def store_pr_files(pr, pr_data, repo_data, db: Session):
 async def github_webhook(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
 
+    print(body)
+
     signature = request.headers.get("X-Hub-Signature-256")
 
     if not signature:
@@ -217,6 +219,42 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
                 await enqueue_sync_history(queue, repo_id)
 
             return JSONResponse(status_code=202, content={"ok": True})
+
+    if event_type == "check_run" and payload.get("action") == "rerequested":
+        check_run = payload.get("check_run", {})
+        repo_data = payload.get("repository", {})
+
+        # Ignore reruns of checks owned by other integrations.
+        if check_run.get("name") != "PRism":
+            return {"ok": True}
+
+        repo = db.query(Repository).filter(
+            Repository.github_id == repo_data.get("id")
+        ).first()
+        if not repo:
+            return {"ok": True}
+
+        pr_numbers = [
+            item.get("number")
+            for item in check_run.get("pull_requests", [])
+            if item.get("number") is not None
+        ]
+        pr_query = db.query(PullRequest).filter(PullRequest.repository_id == repo.id)
+        if pr_numbers:
+            pr_query = pr_query.filter(PullRequest.number.in_(pr_numbers))
+        else:
+            pr_query = pr_query.filter(PullRequest.head_sha == check_run.get("head_sha"))
+
+        pr = pr_query.order_by(PullRequest.updated_at.desc()).first()
+        if not pr:
+            return {"ok": True}
+
+        queue = await get_queue()
+        job = await enqueue_pr_analysis(queue, pr.id, db)
+        return JSONResponse(
+            status_code=202,
+            content={"ok": True, "job_id": job.id},
+        )
 
     return {"ok": True}
 
