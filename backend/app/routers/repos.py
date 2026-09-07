@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.database import get_db
 from app.auth import AuthContext, get_current_user, github_repository_ids
 from app.models import (
-    Repository, PullRequest, PullRequestFile,
+    Repository, IgnoredRepository, PullRequest, PullRequestFile,
     AnalysisJob, FileRiskSummary, JobStatus, ExplanationStatus,
 )
 
@@ -72,22 +72,12 @@ def _get_repo_stats(repo_id: int, db: Session):
     return pr_stats[0], pr_stats[1], avg_risk, health_score, hotspot_count
 
 
-@router.get("/repos")
-async def list_repos(
-    db: Session = Depends(get_db),
-    auth: AuthContext = Depends(get_current_user),
-):
-    allowed_ids = await github_repository_ids(auth)
-    if not allowed_ids:
+def _repo_summaries(repos: list[Repository], db: Session) -> list[dict]:
+    if not repos:
         return []
-
-    repos = db.query(Repository).filter(
-        Repository.github_id.in_(allowed_ids)
-    ).order_by(Repository.created_at.desc()).all()
 
     repo_db_ids = [r.id for r in repos]
 
-    # Bulk query PR counts (total + open) per repo
     pr_stats_rows = db.query(
         PullRequest.repository_id,
         func.count(PullRequest.id),
@@ -97,7 +87,6 @@ async def list_repos(
     ).group_by(PullRequest.repository_id).all()
     pr_stats_map = {row[0]: (row[1], row[2]) for row in pr_stats_rows}
 
-    # Bulk query average risk score per repo
     risk_rows = db.query(
         PullRequest.repository_id,
         func.avg(AnalysisJob.results["total"].as_float()),
@@ -108,7 +97,6 @@ async def list_repos(
     ).group_by(PullRequest.repository_id).all()
     risk_map = {row[0]: row[1] for row in risk_rows}
 
-    # Bulk query hotspot count per repo
     hotspot_rows = db.query(
         FileRiskSummary.repository_id,
         func.count(FileRiskSummary.id),
@@ -119,13 +107,86 @@ async def list_repos(
     hotspot_map = {row[0]: row[1] for row in hotspot_rows}
 
     result = []
-    for r in repos:
-        pr_count, open_pr = pr_stats_map.get(r.id, (0, 0))
-        avg_risk = risk_map.get(r.id)
+    for repo in repos:
+        pr_count, open_pr = pr_stats_map.get(repo.id, (0, 0))
+        avg_risk = risk_map.get(repo.id)
         health_score = max(0, min(100, 100 - int(avg_risk))) if avg_risk is not None else 100
-        hotspot_count = hotspot_map.get(r.id, 0)
-        result.append(_repo_summary(r, pr_count, open_pr, avg_risk, health_score, hotspot_count))
+        result.append(_repo_summary(
+            repo, pr_count, open_pr, avg_risk, health_score,
+            hotspot_map.get(repo.id, 0),
+        ))
     return result
+
+
+@router.get("/repos")
+async def list_repos(
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_current_user),
+):
+    allowed_ids = await github_repository_ids(auth)
+    if not allowed_ids:
+        return []
+
+    repos = db.query(Repository).filter(
+        Repository.github_id.in_(allowed_ids),
+        ~Repository.id.in_(
+            db.query(IgnoredRepository.repository_id).filter(
+                IgnoredRepository.user_id == auth.user.id
+            )
+        ),
+    ).order_by(Repository.created_at.desc()).all()
+    return _repo_summaries(repos, db)
+
+
+@router.get("/repos/ignored")
+async def list_ignored_repos(
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_current_user),
+):
+    allowed_ids = await github_repository_ids(auth)
+    if not allowed_ids:
+        return []
+
+    repos = db.query(Repository).join(
+        IgnoredRepository,
+        IgnoredRepository.repository_id == Repository.id,
+    ).filter(
+        IgnoredRepository.user_id == auth.user.id,
+        Repository.github_id.in_(allowed_ids),
+    ).order_by(IgnoredRepository.created_at.desc()).all()
+    return _repo_summaries(repos, db)
+
+
+@router.post("/repos/{repo_id}/ignore", status_code=204)
+def ignore_repo(
+    repo_id: int,
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_current_user),
+    _access: Repository = Depends(require_repo_access),
+):
+    ignored = db.query(IgnoredRepository).filter(
+        IgnoredRepository.user_id == auth.user.id,
+        IgnoredRepository.repository_id == repo_id,
+    ).first()
+    if not ignored:
+        db.add(IgnoredRepository(user_id=auth.user.id, repository_id=repo_id))
+        db.commit()
+    return Response(status_code=204)
+
+
+@router.delete("/repos/{repo_id}/ignore", status_code=204)
+def restore_repo(
+    repo_id: int,
+    db: Session = Depends(get_db),
+    auth: AuthContext = Depends(get_current_user),
+    _access: Repository = Depends(require_repo_access),
+):
+    db.query(IgnoredRepository).filter(
+        IgnoredRepository.user_id == auth.user.id,
+        IgnoredRepository.repository_id == repo_id,
+    ).delete(synchronize_session=False)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/repos/{repo_id}")

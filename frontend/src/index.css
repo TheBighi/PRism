@@ -199,8 +199,6 @@ a:hover {
 }
 
 .repo-card {
-  display: block;
-  padding: 24px;
   background: var(--bg);
   transition: background 0.1s;
   color: inherit;
@@ -208,7 +206,42 @@ a:hover {
 
 .repo-card:hover {
   background: var(--bg-secondary);
+}
+
+.repo-card__link {
+  display: block;
+  padding: 24px 24px 18px;
+  color: inherit;
+}
+
+.repo-card__link:hover {
   text-decoration: none;
+  opacity: 1;
+}
+
+.repo-card__action {
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 100%;
+  padding: 10px 24px;
+  text-align: left;
+  font: inherit;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.repo-card__action:hover:not(:disabled) {
+  color: #ef4444;
+}
+
+.repo-card__action:disabled,
+.ignored-repo button:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .repo-card__header {
@@ -303,6 +336,64 @@ a:hover {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.8px;
+}
+
+.ignored-repos {
+  margin-top: 48px;
+  border: 1px solid var(--border);
+}
+
+.ignored-repos__header,
+.ignored-repo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ignored-repos__header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.ignored-repos__header h2,
+.ignored-repos__header span {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.ignored-repo {
+  padding: 14px 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.ignored-repo + .ignored-repo {
+  border-top: 1px solid var(--border);
+}
+
+.ignored-repo strong {
+  color: var(--text-h);
+  font-weight: 500;
+}
+
+.ignored-repo button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  cursor: pointer;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.ignored-repo button:hover:not(:disabled) {
+  border-color: var(--text-muted);
 }
 
 /* Risk Bar */
