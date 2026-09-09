@@ -11,7 +11,7 @@ from google.genai import errors as genai_errors
 from app.core.github import format_check_output, post_pr_check
 from app.core.llm import build_explanation_prompt, call_llm
 from app.database import SessionLocal
-from app.models import AnalysisJob, ExplanationStatus, JobStatus, PullRequest, Repository
+from app.models import AnalyzedRepository, AnalysisJob, ExplanationStatus, JobStatus, PullRequest, Repository
 from app.schemas.explanation import PRExplanation
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,14 @@ async def generate_explanation(ctx, job_id: int):
         job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
         if not job or job.status != JobStatus.done or not job.results:
             return
+        pr = db.query(PullRequest).filter(PullRequest.id == job.pull_request_id).first()
+        if not pr or db.query(AnalyzedRepository).filter(
+            AnalyzedRepository.repository_id == pr.repository_id
+        ).first() is None:
+            job.explanation_status = ExplanationStatus.skipped
+            job.explanation_finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return
         job.explanation_status = ExplanationStatus.running
         job.explanation_started_at = datetime.now(timezone.utc)
         job.explanation_error = None
@@ -46,10 +54,6 @@ async def generate_explanation(ctx, job_id: int):
         job.explanation_finished_at = datetime.now(timezone.utc)
         db.commit()
 
-        pr = db.query(PullRequest).filter(PullRequest.id == job.pull_request_id).first()
-        if not pr:
-            logger.warning("Pull request for explanation job %s no longer exists", job_id)
-            return
         repo = db.query(Repository).filter(Repository.id == pr.repository_id).first()
         if repo and repo.installation_id:
             title, summary, results, conclusion = format_check_output(job.explanation)

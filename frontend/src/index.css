@@ -239,7 +239,7 @@ a:hover {
 }
 
 .repo-card__action:disabled,
-.ignored-repo button:disabled {
+.available-repo button:disabled {
   cursor: wait;
   opacity: 0.55;
 }
@@ -338,26 +338,26 @@ a:hover {
   letter-spacing: 0.8px;
 }
 
-.ignored-repos {
+.available-repos {
   margin-top: 48px;
   border: 1px solid var(--border);
 }
 
-.ignored-repos__header,
-.ignored-repo {
+.available-repos__header,
+.available-repo {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.ignored-repos__header {
+.available-repos__header {
   padding: 14px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
 }
 
-.ignored-repos__header h2,
-.ignored-repos__header span {
+.available-repos__header h2,
+.available-repos__header span {
   margin: 0;
   color: var(--text-muted);
   font-size: 10px;
@@ -365,22 +365,28 @@ a:hover {
   letter-spacing: 0.8px;
 }
 
-.ignored-repo {
+.available-repos__header p {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.available-repo {
   padding: 14px 18px;
   color: var(--text-muted);
   font-size: 12px;
 }
 
-.ignored-repo + .ignored-repo {
+.available-repo + .available-repo {
   border-top: 1px solid var(--border);
 }
 
-.ignored-repo strong {
+.available-repo strong {
   color: var(--text-h);
   font-weight: 500;
 }
 
-.ignored-repo button {
+.available-repo button {
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-h);
@@ -392,7 +398,7 @@ a:hover {
   letter-spacing: 0.6px;
 }
 
-.ignored-repo button:hover:not(:disabled) {
+.available-repo button:hover:not(:disabled) {
   border-color: var(--text-muted);
 }
 

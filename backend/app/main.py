@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db, engine, Base
-from app.models import Repository, PullRequest, PullRequestFile, AnalysisJob
+from app.models import AnalyzedRepository, Repository, PullRequest, PullRequestFile, AnalysisJob
 from app.auth import AuthContext, get_current_user, router as auth_router, github_repository_ids, get_http_client, close_http_client
 
 from app.core.queue import enqueue_pr_analysis, enqueue_sync_history, get_queue
@@ -71,29 +71,70 @@ def parse_github_timestamp(ts):
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+def upsert_repository(repo_data: dict, installation_id: int | None, db: Session) -> Repository:
+    repo = db.query(Repository).filter(Repository.github_id == repo_data["id"]).first()
+    owner = repo_data.get("owner", {}).get("login") or repo_data["full_name"].split("/", 1)[0]
+    if not repo:
+        repo = Repository(github_id=repo_data["id"], installation_id=installation_id)
+        db.add(repo)
+
+    repo.owner = owner
+    repo.name = repo_data["name"]
+    repo.full_name = repo_data["full_name"]
+    if "default_branch" in repo_data:
+        repo.default_branch = repo_data["default_branch"]
+    repo.url = repo_data.get("html_url") or f"https://github.com/{repo_data['full_name']}"
+    if installation_id is not None:
+        repo.installation_id = installation_id
+    db.flush()
+    return repo
+
+
+def store_installation_repositories(payload: dict, db: Session) -> None:
+    installation_id = payload.get("installation", {}).get("id")
+    action = payload.get("action")
+
+    if action in ("deleted", "suspend"):
+        repos = db.query(Repository).filter(Repository.installation_id == installation_id).all()
+        repo_ids = [repo.id for repo in repos]
+        if repo_ids:
+            db.query(AnalyzedRepository).filter(
+                AnalyzedRepository.repository_id.in_(repo_ids)
+            ).delete(synchronize_session=False)
+        for repo in repos:
+            repo.installation_id = None
+        db.commit()
+        return
+
+    for repo_data in payload.get("repositories", []):
+        upsert_repository(repo_data, installation_id, db)
+    db.commit()
+
+
+def update_installation_repositories(payload: dict, db: Session) -> None:
+    installation_id = payload.get("installation", {}).get("id")
+    for repo_data in payload.get("repositories_added", []):
+        upsert_repository(repo_data, installation_id, db)
+
+    removed_github_ids = [repo["id"] for repo in payload.get("repositories_removed", [])]
+    if removed_github_ids:
+        removed = db.query(Repository).filter(Repository.github_id.in_(removed_github_ids)).all()
+        repo_ids = [repo.id for repo in removed]
+        if repo_ids:
+            db.query(AnalyzedRepository).filter(
+                AnalyzedRepository.repository_id.in_(repo_ids)
+            ).delete(synchronize_session=False)
+        for repo in removed:
+            repo.installation_id = None
+    db.commit()
+
+
 def store_pull_request(payload, db: Session):
     repo_data = payload["repository"]
     pr_data = payload["pull_request"]
     installation_id = payload.get("installation", {}).get("id")
 
-    repo = db.query(Repository).filter(Repository.github_id == repo_data["id"]).first()
-    new_repo = False
-    if not repo:
-        repo = Repository(
-            github_id=repo_data["id"],
-            owner=repo_data["owner"]["login"],
-            name=repo_data["name"],
-            full_name=repo_data["full_name"],
-            default_branch=repo_data.get("default_branch"),
-            url=repo_data["html_url"],
-            installation_id=installation_id,
-        )
-        db.add(repo)
-        db.flush()
-        new_repo = True
-
-    elif installation_id is not None:
-        repo.installation_id = installation_id
+    repo = upsert_repository(repo_data, installation_id, db)
 
     existing = db.query(PullRequest).filter(PullRequest.github_id == pr_data["id"]).first()
     if existing:
@@ -134,7 +175,7 @@ def store_pull_request(payload, db: Session):
 
     db.commit()
 
-    return pr, repo.id, new_repo
+    return pr, repo.id
 
 
 def store_pr_files(pr, pr_data, repo_data, db: Session):
@@ -181,8 +222,6 @@ def store_pr_files(pr, pr_data, repo_data, db: Session):
 async def github_webhook(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
 
-    print(body)
-
     signature = request.headers.get("X-Hub-Signature-256")
 
     if not signature:
@@ -206,19 +245,39 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
     payload = await request.json()
 
     event_type = request.headers.get("X-GitHub-Event")
+    if event_type == "installation":
+        await run_in_threadpool(store_installation_repositories, payload, db)
+        return {"ok": True}
+
+    if event_type == "installation_repositories":
+        await run_in_threadpool(update_installation_repositories, payload, db)
+        return {"ok": True}
+
     if event_type == "pull_request":
         action = payload.get("action")
         if action in ("opened", "synchronize", "reopened"):
-            pr, repo_id, new_repo = await run_in_threadpool(store_pull_request, payload, db)
+            repo = upsert_repository(
+                payload["repository"], payload.get("installation", {}).get("id"), db
+            )
+            enabled = db.query(AnalyzedRepository).filter(
+                AnalyzedRepository.repository_id == repo.id
+            ).first() is not None
+            db.commit()
+            if not enabled:
+                return JSONResponse(
+                    status_code=202,
+                    content={"ok": True, "analyzed": False},
+                )
+
+            pr, _repo_id = await run_in_threadpool(store_pull_request, payload, db)
 
             queue = await get_queue()
 
             await enqueue_pr_analysis(queue, pr.id, db)
+            if repo.history_last_synced_at is None:
+                await enqueue_sync_history(queue, repo.id)
 
-            if new_repo:
-                await enqueue_sync_history(queue, repo_id)
-
-            return JSONResponse(status_code=202, content={"ok": True})
+            return JSONResponse(status_code=202, content={"ok": True, "analyzed": True})
 
     if event_type == "check_run" and payload.get("action") == "rerequested":
         check_run = payload.get("check_run", {})
@@ -232,6 +291,10 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
             Repository.github_id == repo_data.get("id")
         ).first()
         if not repo:
+            return {"ok": True}
+        if db.query(AnalyzedRepository).filter(
+            AnalyzedRepository.repository_id == repo.id
+        ).first() is None:
             return {"ok": True}
 
         pr_numbers = [

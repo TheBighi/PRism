@@ -43,8 +43,8 @@ class Repository(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-class IgnoredRepository(Base):
-    __tablename__ = "ignored_repositories"
+class AnalyzedRepository(Base):
+    __tablename__ = "analyzed_repositories"
 
     user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     repository_id = Column(BigInteger, ForeignKey("repositories.id", ondelete="CASCADE"), primary_key=True)

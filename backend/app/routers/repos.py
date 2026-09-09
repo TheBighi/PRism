@@ -5,7 +5,7 @@ from sqlalchemy import func
 from app.database import get_db
 from app.auth import AuthContext, get_current_user, github_repository_ids
 from app.models import (
-    Repository, IgnoredRepository, PullRequest, PullRequestFile,
+    AnalyzedRepository, Repository, PullRequest, PullRequestFile,
     AnalysisJob, FileRiskSummary, JobStatus, ExplanationStatus,
 )
 
@@ -27,7 +27,8 @@ async def require_repo_access(
 
 
 def _repo_summary(repo: Repository, pr_count: int, open_pr_count: int,
-                   avg_risk, health_score: int, hotspot_count: int) -> dict:
+                   avg_risk, health_score: int, hotspot_count: int,
+                   analysis_enabled: bool = True) -> dict:
     return {
         "id": repo.id,
         "github_id": repo.github_id,
@@ -43,6 +44,7 @@ def _repo_summary(repo: Repository, pr_count: int, open_pr_count: int,
         "avg_risk_score": round(avg_risk, 1) if avg_risk is not None else None,
         "health_score": health_score,
         "hotspot_count": hotspot_count,
+        "analysis_enabled": analysis_enabled,
     }
 
 
@@ -72,7 +74,9 @@ def _get_repo_stats(repo_id: int, db: Session):
     return pr_stats[0], pr_stats[1], avg_risk, health_score, hotspot_count
 
 
-def _repo_summaries(repos: list[Repository], db: Session) -> list[dict]:
+def _repo_summaries(
+    repos: list[Repository], db: Session, analysis_enabled: bool = True
+) -> list[dict]:
     if not repos:
         return []
 
@@ -113,7 +117,7 @@ def _repo_summaries(repos: list[Repository], db: Session) -> list[dict]:
         health_score = max(0, min(100, 100 - int(avg_risk))) if avg_risk is not None else 100
         result.append(_repo_summary(
             repo, pr_count, open_pr, avg_risk, health_score,
-            hotspot_map.get(repo.id, 0),
+            hotspot_map.get(repo.id, 0), analysis_enabled,
         ))
     return result
 
@@ -129,17 +133,17 @@ async def list_repos(
 
     repos = db.query(Repository).filter(
         Repository.github_id.in_(allowed_ids),
-        ~Repository.id.in_(
-            db.query(IgnoredRepository.repository_id).filter(
-                IgnoredRepository.user_id == auth.user.id
+        Repository.id.in_(
+            db.query(AnalyzedRepository.repository_id).filter(
+                AnalyzedRepository.user_id == auth.user.id
             )
         ),
     ).order_by(Repository.created_at.desc()).all()
     return _repo_summaries(repos, db)
 
 
-@router.get("/repos/ignored")
-async def list_ignored_repos(
+@router.get("/repos/available")
+async def list_available_repos(
     db: Session = Depends(get_db),
     auth: AuthContext = Depends(get_current_user),
 ):
@@ -147,43 +151,44 @@ async def list_ignored_repos(
     if not allowed_ids:
         return []
 
-    repos = db.query(Repository).join(
-        IgnoredRepository,
-        IgnoredRepository.repository_id == Repository.id,
-    ).filter(
-        IgnoredRepository.user_id == auth.user.id,
+    repos = db.query(Repository).filter(
         Repository.github_id.in_(allowed_ids),
-    ).order_by(IgnoredRepository.created_at.desc()).all()
-    return _repo_summaries(repos, db)
+        ~Repository.id.in_(
+            db.query(AnalyzedRepository.repository_id).filter(
+                AnalyzedRepository.user_id == auth.user.id
+            )
+        ),
+    ).order_by(Repository.created_at.desc()).all()
+    return _repo_summaries(repos, db, analysis_enabled=False)
 
 
-@router.post("/repos/{repo_id}/ignore", status_code=204)
-def ignore_repo(
+@router.put("/repos/{repo_id}/analysis", status_code=204)
+async def enable_repo_analysis(
     repo_id: int,
     db: Session = Depends(get_db),
     auth: AuthContext = Depends(get_current_user),
     _access: Repository = Depends(require_repo_access),
 ):
-    ignored = db.query(IgnoredRepository).filter(
-        IgnoredRepository.user_id == auth.user.id,
-        IgnoredRepository.repository_id == repo_id,
+    selection = db.query(AnalyzedRepository).filter(
+        AnalyzedRepository.user_id == auth.user.id,
+        AnalyzedRepository.repository_id == repo_id,
     ).first()
-    if not ignored:
-        db.add(IgnoredRepository(user_id=auth.user.id, repository_id=repo_id))
+    if not selection:
+        db.add(AnalyzedRepository(user_id=auth.user.id, repository_id=repo_id))
         db.commit()
     return Response(status_code=204)
 
 
-@router.delete("/repos/{repo_id}/ignore", status_code=204)
-def restore_repo(
+@router.delete("/repos/{repo_id}/analysis", status_code=204)
+def disable_repo_analysis(
     repo_id: int,
     db: Session = Depends(get_db),
     auth: AuthContext = Depends(get_current_user),
     _access: Repository = Depends(require_repo_access),
 ):
-    db.query(IgnoredRepository).filter(
-        IgnoredRepository.user_id == auth.user.id,
-        IgnoredRepository.repository_id == repo_id,
+    db.query(AnalyzedRepository).filter(
+        AnalyzedRepository.user_id == auth.user.id,
+        AnalyzedRepository.repository_id == repo_id,
     ).delete(synchronize_session=False)
     db.commit()
     return Response(status_code=204)

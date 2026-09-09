@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchIgnoredRepos, fetchRepos, ignoreRepo, restoreRepo } from "../api";
+import {
+  disableRepoAnalysis,
+  enableRepoAnalysis,
+  fetchAvailableRepos,
+  fetchRepos,
+} from "../api";
 import type { RepoSummary } from "../types";
 import Loading from "../components/Loading";
 import ErrorDisplay from "../components/ErrorDisplay";
@@ -8,33 +13,33 @@ import RiskBar from "../components/RiskBar";
 
 export default function ReposList() {
   const [repos, setRepos] = useState<RepoSummary[]>([]);
-  const [ignoredRepos, setIgnoredRepos] = useState<RepoSummary[]>([]);
+  const [availableRepos, setAvailableRepos] = useState<RepoSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionRepoId, setActionRepoId] = useState<number | null>(null);
 
   useEffect(() => {
-    Promise.all([fetchRepos(), fetchIgnoredRepos()])
-      .then(([visible, ignored]) => {
-        setRepos(visible);
-        setIgnoredRepos(ignored);
+    Promise.all([fetchRepos(), fetchAvailableRepos()])
+      .then(([selected, available]) => {
+        setRepos(selected);
+        setAvailableRepos(available);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  async function changeIgnoredState(repo: RepoSummary, ignored: boolean) {
+  async function changeAnalysisState(repo: RepoSummary, enabled: boolean) {
     setActionRepoId(repo.id);
     setError(null);
     try {
-      if (ignored) {
-        await ignoreRepo(repo.id);
-        setRepos((current) => current.filter((item) => item.id !== repo.id));
-        setIgnoredRepos((current) => [repo, ...current]);
+      if (enabled) {
+        await enableRepoAnalysis(repo.id);
+        setAvailableRepos((current) => current.filter((item) => item.id !== repo.id));
+        setRepos((current) => [{ ...repo, analysis_enabled: true }, ...current]);
       } else {
-        await restoreRepo(repo.id);
-        setIgnoredRepos((current) => current.filter((item) => item.id !== repo.id));
-        setRepos((current) => [repo, ...current]);
+        await disableRepoAnalysis(repo.id);
+        setRepos((current) => current.filter((item) => item.id !== repo.id));
+        setAvailableRepos((current) => [{ ...repo, analysis_enabled: false }, ...current]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not update repository preference");
@@ -49,7 +54,7 @@ export default function ReposList() {
       <div className="page-header">
         <h1>Repositories</h1>
         <p className="page-subtitle">
-          {repos.length} {repos.length === 1 ? "repository" : "repositories"} shown
+          Choose exactly which installed repositories PRism may analyze
         </p>
       </div>
 
@@ -57,8 +62,8 @@ export default function ReposList() {
 
       {repos.length === 0 ? (
         <div className="empty-state">
-          <p>{ignoredRepos.length > 0
-            ? "All available repositories are ignored. Restore one from the list below."
+          <p>{availableRepos.length > 0
+            ? "No repositories are being analyzed. Add one from the available list below."
             : "No repositories yet. Install the PRism GitHub App on a repository to get started."}</p>
         </div>
       ) : (
@@ -110,31 +115,34 @@ export default function ReposList() {
                 className="repo-card__action"
                 type="button"
                 disabled={actionRepoId === repo.id}
-                onClick={() => void changeIgnoredState(repo, true)}
+                onClick={() => void changeAnalysisState(repo, false)}
               >
-                {actionRepoId === repo.id ? "Ignoring..." : "Ignore repository"}
+                {actionRepoId === repo.id ? "Updating..." : "Stop analyzing"}
               </button>
             </article>
           ))}
         </div>
       )}
 
-      {ignoredRepos.length > 0 && (
-        <section className="ignored-repos">
-          <div className="ignored-repos__header">
-            <h2>Ignored repositories</h2>
-            <span>{ignoredRepos.length}</span>
+      {availableRepos.length > 0 && (
+        <section className="available-repos">
+          <div className="available-repos__header">
+            <div>
+              <h2>Available repositories</h2>
+              <p>Webhook events are ignored until you enable analysis.</p>
+            </div>
+            <span>{availableRepos.length}</span>
           </div>
-          <div className="ignored-repos__list">
-            {ignoredRepos.map((repo) => (
-              <div className="ignored-repo" key={repo.id}>
+          <div className="available-repos__list">
+            {availableRepos.map((repo) => (
+              <div className="available-repo" key={repo.id}>
                 <span><strong>{repo.owner}</strong>/{repo.name}</span>
                 <button
                   type="button"
                   disabled={actionRepoId === repo.id}
-                  onClick={() => void changeIgnoredState(repo, false)}
+                  onClick={() => void changeAnalysisState(repo, true)}
                 >
-                  {actionRepoId === repo.id ? "Restoring..." : "Restore"}
+                  {actionRepoId === repo.id ? "Enabling..." : "Analyze"}
                 </button>
               </div>
             ))}

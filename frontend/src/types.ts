@@ -13,6 +13,7 @@ export interface RepoSummary {
   avg_risk_score: number | null;
   health_score: number;
   hotspot_count: number;
+  analysis_enabled: boolean;
 }
 
 export interface RepoHealth {

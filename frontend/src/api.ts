@@ -95,20 +95,20 @@ export async function fetchRepos(): Promise<RepoSummary[]> {
   return cached("repos", () => api.get<RepoSummary[]>("/repos").then((r) => r.data));
 }
 
-export async function fetchIgnoredRepos(): Promise<RepoSummary[]> {
-  return cached("ignored-repos", () => api.get<RepoSummary[]>("/repos/ignored").then((r) => r.data));
+export async function fetchAvailableRepos(): Promise<RepoSummary[]> {
+  return cached("available-repos", () => api.get<RepoSummary[]>("/repos/available").then((r) => r.data));
 }
 
-export async function ignoreRepo(repoId: number): Promise<void> {
-  await api.post(`/repos/${repoId}/ignore`);
+export async function enableRepoAnalysis(repoId: number): Promise<void> {
+  await api.put(`/repos/${repoId}/analysis`);
   invalidateCache("repos");
-  invalidateCache("ignored-repos");
+  invalidateCache("available-repos");
 }
 
-export async function restoreRepo(repoId: number): Promise<void> {
-  await api.delete(`/repos/${repoId}/ignore`);
+export async function disableRepoAnalysis(repoId: number): Promise<void> {
+  await api.delete(`/repos/${repoId}/analysis`);
   invalidateCache("repos");
-  invalidateCache("ignored-repos");
+  invalidateCache("available-repos");
 }
 
 export async function fetchRepo(repoId: number): Promise<RepoSummary> {

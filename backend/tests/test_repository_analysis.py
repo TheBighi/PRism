@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth import AuthContext
 from app.database import Base
-from app.models import IgnoredRepository, Repository, User
+from app.models import AnalyzedRepository, Repository, User
 from app.routers import repos as repos_router
 
 
@@ -20,7 +20,7 @@ def make_db():
     return sessionmaker(bind=engine)()
 
 
-def test_repository_can_be_ignored_and_restored(monkeypatch):
+def test_repository_analysis_is_opt_in(monkeypatch):
     db = make_db()
     user = User(id=1, github_id=10, login="octocat")
     repo = Repository(
@@ -39,20 +39,25 @@ def test_repository_can_be_ignored_and_restored(monkeypatch):
 
     monkeypatch.setattr(repos_router, "github_repository_ids", allowed_repositories)
 
-    assert [item["id"] for item in asyncio.run(repos_router.list_repos(db, auth))] == [repo.id]
+    assert asyncio.run(repos_router.list_repos(db, auth)) == []
+    available = asyncio.run(repos_router.list_available_repos(db, auth))
+    assert [item["id"] for item in available] == [repo.id]
+    assert available[0]["analysis_enabled"] is False
 
-    response = repos_router.ignore_repo(repo.id, db, auth, repo)
+    response = asyncio.run(repos_router.enable_repo_analysis(repo.id, db, auth, repo))
+    assert response.status_code == 204
+    selected = asyncio.run(repos_router.list_repos(db, auth))
+    assert [item["id"] for item in selected] == [repo.id]
+    assert selected[0]["analysis_enabled"] is True
+    assert asyncio.run(repos_router.list_available_repos(db, auth)) == []
+
+    response = repos_router.disable_repo_analysis(repo.id, db, auth, repo)
     assert response.status_code == 204
     assert asyncio.run(repos_router.list_repos(db, auth)) == []
-    assert [item["id"] for item in asyncio.run(repos_router.list_ignored_repos(db, auth))] == [repo.id]
-
-    response = repos_router.restore_repo(repo.id, db, auth, repo)
-    assert response.status_code == 204
-    assert [item["id"] for item in asyncio.run(repos_router.list_repos(db, auth))] == [repo.id]
-    assert asyncio.run(repos_router.list_ignored_repos(db, auth)) == []
+    assert [item["id"] for item in asyncio.run(repos_router.list_available_repos(db, auth))] == [repo.id]
 
 
-def test_ignored_repository_is_scoped_to_user(monkeypatch):
+def test_repository_selection_is_scoped_to_user(monkeypatch):
     db = make_db()
     first_user = User(id=1, github_id=10, login="first")
     second_user = User(id=2, github_id=20, login="second")
@@ -64,7 +69,7 @@ def test_ignored_repository_is_scoped_to_user(monkeypatch):
         full_name="team/project",
     )
     db.add_all([first_user, second_user, repo])
-    db.add(IgnoredRepository(user_id=first_user.id, repository_id=repo.id))
+    db.add(AnalyzedRepository(user_id=first_user.id, repository_id=repo.id))
     db.commit()
 
     async def allowed_repositories(_auth):
@@ -74,5 +79,6 @@ def test_ignored_repository_is_scoped_to_user(monkeypatch):
 
     first_auth = AuthContext(user=first_user, access_token="token")
     second_auth = AuthContext(user=second_user, access_token="token")
-    assert asyncio.run(repos_router.list_repos(db, first_auth)) == []
-    assert [item["id"] for item in asyncio.run(repos_router.list_repos(db, second_auth))] == [repo.id]
+    assert [item["id"] for item in asyncio.run(repos_router.list_repos(db, first_auth))] == [repo.id]
+    assert asyncio.run(repos_router.list_repos(db, second_auth)) == []
+    assert [item["id"] for item in asyncio.run(repos_router.list_available_repos(db, second_auth))] == [repo.id]

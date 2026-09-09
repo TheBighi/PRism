@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from arq.connections import RedisSettings
 
 from app.database import SessionLocal
-from app.models import AnalysisJob, FileRiskSummary, JobStatus, PullRequest, PullRequestFile, Repository
+from app.models import AnalyzedRepository, AnalysisJob, FileRiskSummary, JobStatus, PullRequest, PullRequestFile, Repository
 from app.core.queue import enqueue_pr_analysis, enqueue_pr_explanation, get_queue
 from app.core.risk_score import compute_risk_score
 
@@ -20,6 +20,14 @@ async def analyze_pr(ctx, pull_request_id: int, job_id: int):
 
         pr = db.query(PullRequest).filter(PullRequest.id == pull_request_id).first()
         repo = db.query(Repository).filter(Repository.id == pr.repository_id).first()
+        if db.query(AnalyzedRepository).filter(
+            AnalyzedRepository.repository_id == repo.id
+        ).first() is None:
+            job.status = JobStatus.failed
+            job.error = "Repository analysis was disabled before this job started"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return
         files = (
             db.query(PullRequestFile)
             .filter(PullRequestFile.pull_request_id == pr.id)

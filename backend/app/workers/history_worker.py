@@ -10,7 +10,7 @@ from arq.connections import RedisSettings
 
 from app.core.github import get_installation_token
 from app.database import SessionLocal
-from app.models import Commit, CommitFile, FileRiskSummary, Repository
+from app.models import AnalyzedRepository, Commit, CommitFile, FileRiskSummary, Repository
 
 GITHUB_API_URL = "https://api.github.com"
 
@@ -108,6 +108,10 @@ async def sync_history(ctx, repository_id: int):
     try:
         repo = db.query(Repository).filter(Repository.id == repository_id).first()
         if not repo or not repo.installation_id:
+            return
+        if db.query(AnalyzedRepository).filter(
+            AnalyzedRepository.repository_id == repository_id
+        ).first() is None:
             return
 
         token = await get_installation_token(repo.installation_id)
