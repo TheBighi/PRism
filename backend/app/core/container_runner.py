@@ -1,64 +1,132 @@
 """
 app/core/container_runner.py
 
-Launches an ephemeral, locked-down Docker container to run the full
-clone -> lint -> security-scan pipeline against an untrusted PR head commit,
+Fetches the requested commits with a GitHub installation token, then launches
+an ephemeral, locked-down Docker container to run the analysis pipeline,
 then reads back a single normalized JSON array from its stdout.
 
 The container image is built from Dockerfile.analysis and expects to be
 invoked as:
 
-    <clone_url> <head_sha> <filename1> [filename2 ...]
+    <mounted_repo> <base_sha> <head_sha> <filename1> [filename2 ...]
 
 and to print exactly one JSON array to stdout on success.
 """
 
+import base64
 import json
 import logging
+import os
+import subprocess
+import tempfile
+from pathlib import Path
 
-import requests
 import docker
+import requests
 from docker.errors import APIError, ImageNotFound, NotFound
 
 logger = logging.getLogger(__name__)
 
 ANALYSIS_IMAGE = "pr-analysis:latest"
-CONTAINER_TIMEOUT_S = 240
+CONTAINER_TIMEOUT_S = 900
 
 
 class AnalysisError(Exception):
     """Raised for any failure in the containerized analysis pipeline —
     covers image issues, container failures, timeouts, and bad output."""
-    pass
 
 
-def run_analysis_in_container(clone_url: str, base_sha: str, head_sha: str, filenames: list[str]) -> list[dict]:
+def _prepare_repository(
+    clone_url: str,
+    token: str,
+    base_sha: str,
+    head_sha: str,
+    destination: Path,
+) -> None:
+    credentials = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    git_env = os.environ.copy()
+    git_env.update({
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraHeader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {credentials}",
+        "GIT_TERMINAL_PROMPT": "0",
+    })
+
+    try:
+        subprocess.run(
+            ["git", "init", "--bare", "-q", str(destination)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        for name, sha in (("base", base_sha), ("head", head_sha)):
+            subprocess.run(
+                ["git", "-C", str(destination), "fetch", "-q", "--depth", "1", clone_url, sha],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=git_env,
+            )
+            subprocess.run(
+                ["git", "-C", str(destination), "update-ref", f"refs/prism/{name}", "FETCH_HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+    except subprocess.CalledProcessError as e:
+        raise AnalysisError(
+            f"authenticated repository fetch failed: {e.stderr.strip() or 'git command failed'}"
+        ) from e
+
+
+def run_analysis_in_container(
+    clone_url: str,
+    installation_token: str,
+    base_sha: str,
+    head_sha: str,
+    filenames: list[str],
+) -> list[dict]:
     if not filenames:
         return []
 
     client = docker.from_env()
+    staging = tempfile.TemporaryDirectory(prefix="pr-analysis-source-")
+    source_repo = Path(staging.name) / "repo.git"
+    try:
+        _prepare_repository(clone_url, installation_token, base_sha, head_sha, source_repo)
+    except Exception:
+        staging.cleanup()
+        raise
 
     try:
         container = client.containers.run(
             ANALYSIS_IMAGE,
-            command=[clone_url, base_sha, head_sha, *filenames],
+            command=["/input/repo.git", base_sha, head_sha, *filenames],
             detach=True,
             network_mode="bridge",        # needed for git fetch + npm audit registry calls
-            mem_limit="512m",
+            volumes={str(source_repo): {"bind": "/input/repo.git", "mode": "ro"}},
+            environment={
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "safe.directory",
+                "GIT_CONFIG_VALUE_0": "/input/repo.git",
+            },
+            mem_limit="2g",
             nano_cpus=500_000_000,        # ~0.5 CPU
             pids_limit=256,               # cap fork bombs / runaway subprocesses
             read_only=True,               # root fs immutable...
-            tmpfs={"/tmp": "size=256m,mode=1777"},  # ...except /tmp, which tempfile.mkdtemp needs
+            tmpfs={"/tmp": "size=2g,mode=1777"},  # ...except bounded analysis working space
             security_opt=["no-new-privileges"],
             cap_drop=["ALL"],
             user="runner",
         )
     except ImageNotFound:
+        staging.cleanup()
         raise AnalysisError(
             f"analysis image '{ANALYSIS_IMAGE}' not found — "
             f"build it with: docker build -f Dockerfile.analysis -t {ANALYSIS_IMAGE} ."
         )
     except APIError as e:
+        staging.cleanup()
         raise AnalysisError(f"failed to start analysis container: {e}")
 
     try:
@@ -100,3 +168,4 @@ def run_analysis_in_container(clone_url: str, base_sha: str, head_sha: str, file
             container.remove(force=True)
         except (APIError, NotFound):
             logger.warning("failed to remove analysis container %s during cleanup", container.id)
+        staging.cleanup()

@@ -10,7 +10,7 @@ Inputs consumed (all already exist in the pipeline):
   - grouped findings: security / linting / types (severity-tagged)
   - dependencies: added/changed/removed entries
   - coverage_delta: per-file head/base/delta coverage
-  - test_results: test execution outcomes
+  - tests: failed test execution outcomes
 """
 
 WEIGHTS = {
@@ -136,7 +136,7 @@ def _historical_risk_score(grouped_results: list[dict]) -> dict:
 
 
 def _test_failure_score(grouped_results: list[dict]) -> dict:
-    test_section = next((g for g in grouped_results if g.get("type") == "test_results"), None)
+    test_section = next((g for g in grouped_results if g.get("type") == "tests"), None)
     findings = test_section.get("results", []) if test_section else []
 
     failed = [f for f in findings if f.get("severity") == "error"]
@@ -145,15 +145,14 @@ def _test_failure_score(grouped_results: list[dict]) -> dict:
     if not findings:
         return {"score": 0.0, "failed": 0, "passed": 0, "total": 0}
 
-    fail_ratio = len(failed) / len(findings)
-    score = min(fail_ratio * 2, 1.0)  # any failure is bad, all failures = 1.0
+    score = min(len(failed) * TEST_FAILURE_PENALTY, 1.0)
 
     return {
         "score": score,
         "failed": len(failed),
         "passed": len(passed),
         "total": len(findings),
-        "failed_tests": [f.get("filename", f.get("message", "")) for f in failed],
+        "failed_tests": [f.get("file", f.get("message", "")) for f in failed],
     }
 
 

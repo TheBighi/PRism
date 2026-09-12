@@ -90,12 +90,12 @@ def dependency_state(repo_dir: Path) -> dict[str, dict]:
     state = {}
     for path in repo_dir.glob("**/package.json"):
         parts = path.parts
-        if "node_modules" in parts or ".git" in parts:
+        if "node_modules" in parts or ".pr-analysis-python" in parts or ".git" in parts:
             continue
         state[path.relative_to(repo_dir).as_posix()] = _parse_package_json(path)
     for path in repo_dir.glob("**/requirements.txt"):
         parts = path.parts
-        if "node_modules" in parts or ".git" in parts:
+        if "node_modules" in parts or ".pr-analysis-python" in parts or ".git" in parts:
             continue
         state[path.relative_to(repo_dir).as_posix()] = _parse_requirements(path)
     return state

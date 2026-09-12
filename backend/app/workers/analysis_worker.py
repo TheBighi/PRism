@@ -7,6 +7,7 @@ from app.core.queue import enqueue_pr_analysis, enqueue_pr_explanation, get_queu
 from app.core.risk_score import compute_risk_score
 
 from app.core.container_runner import run_analysis_in_container
+from app.core.github import get_installation_token
 
 HOTSPOT_THRESHOLD = 60
 
@@ -36,7 +37,12 @@ async def analyze_pr(ctx, pull_request_id: int, job_id: int):
         )
         filenames = [f.filename for f in files]
 
-        results = run_analysis_in_container(repo.url, pr.base_sha, pr.head_sha, filenames)
+        if not repo.installation_id:
+            raise RuntimeError("GitHub App is not installed for this repository")
+        installation_token = await get_installation_token(repo.installation_id)
+        results = run_analysis_in_container(
+            repo.url, installation_token, pr.base_sha, pr.head_sha, filenames
+        )
 
         file_risks = (
             db.query(FileRiskSummary)
@@ -95,5 +101,5 @@ class WorkerSettings:
     functions = [analyze_pr]
     queue_name = "analysis:queue"
     max_jobs = 2
-    job_timeout = 300
+    job_timeout = 960
     redis_settings = RedisSettings(host="localhost", port=6379)

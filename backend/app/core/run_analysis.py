@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -25,9 +26,92 @@ from app.core.test_runner import (
 from app.core.type_check import TypeCheckError, new_errors, type_check_files
 
 
+class DependencyInstallError(Exception):
+    pass
+
+
+def _install_project_dependencies(repo_dir: Path) -> None:
+    excluded = {".git", ".pr-analysis-python", "node_modules"}
+    target = repo_dir / ".pr-analysis-python"
+    requirements = sorted(
+        path for path in repo_dir.glob("**/requirements.txt")
+        if not excluded.intersection(path.parts)
+    )
+    python_project_dirs = {
+        path.parent
+        for filename in ("pyproject.toml", "setup.py", "setup.cfg")
+        for path in repo_dir.glob(f"**/{filename}")
+        if not excluded.intersection(path.parts)
+    }
+    installs = [(path.parent, ["-r", str(path)]) for path in requirements]
+    installs.extend(
+        (project_dir, ["."])
+        for project_dir in sorted(python_project_dirs)
+    )
+    for project_dir, install_source in installs:
+        result = subprocess.run(
+            [
+                "python3", "-m", "pip", "install",
+                "--disable-pip-version-check", "--no-cache-dir",
+                "--upgrade", "--target", str(target), *install_source,
+            ],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise DependencyInstallError(
+                f"pip dependency installation failed: {result.stderr.strip() or result.stdout.strip()}"
+            )
+    if installs:
+        existing_path = os.environ.get("PYTHONPATH")
+        os.environ["PYTHONPATH"] = os.pathsep.join(
+            value for value in (str(target), existing_path) if value
+        )
+
+    package_files = sorted(
+        path for path in repo_dir.glob("**/package.json")
+        if not excluded.intersection(path.parts)
+    )
+    os.environ["NPM_CONFIG_CACHE"] = "/tmp/npm-cache"
+    for package_file in package_files:
+        package_dir = package_file.parent
+        has_lockfile = (package_dir / "package-lock.json").is_file()
+        command = ["npm", "ci"] if has_lockfile else ["npm", "install", "--package-lock=false"]
+        result = subprocess.run(
+            [
+                *command, "--ignore-scripts", "--no-audit", "--no-fund",
+                "--cache", "/tmp/npm-cache",
+            ],
+            cwd=package_dir,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise DependencyInstallError(
+                f"npm dependency installation failed: {result.stderr.strip() or result.stdout.strip()}"
+            )
+def _remove_project_dependencies(repo_dir: Path) -> None:
+    target = repo_dir / ".pr-analysis-python"
+    shutil.rmtree(target, ignore_errors=True)
+    python_paths = os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    os.environ["PYTHONPATH"] = os.pathsep.join(path for path in python_paths if path != str(target))
+    node_modules = sorted(
+        repo_dir.glob("**/node_modules"),
+        key=lambda path: len(path.parts),
+    )
+    for path in node_modules:
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+
+
 def _checkout(repo_dir: Path, clone_url: str, sha: str):
     try:
-        subprocess.run(["git", "fetch", "--depth", "1", clone_url, sha],
+        subprocess.run(["git", "-c", f"safe.directory={clone_url}", "fetch", "--depth", "1", clone_url, sha],
                         cwd=repo_dir, check=True, capture_output=True, text=True)
         subprocess.run(["git", "checkout", "FETCH_HEAD"],
                         cwd=repo_dir, check=True, capture_output=True, text=True)
@@ -113,9 +197,18 @@ def main():
 
     clone_url, base_sha, head_sha, *filenames = sys.argv[1:]
 
+    source_copy_dir = None
+    mounted_source = Path(clone_url)
+    if mounted_source.is_dir():
+        source_copy_dir = Path(tempfile.mkdtemp(prefix="pr-analysis-source-"))
+        copied_source = source_copy_dir / "repo.git"
+        shutil.copytree(mounted_source, copied_source)
+        clone_url = str(copied_source)
+
     tmp_dir = Path(tempfile.mkdtemp(prefix="pr-analysis-"))
     try:
         clone_repo_at_sha(clone_url, head_sha, tmp_dir)
+        _install_project_dependencies(tmp_dir)
 
         candidate_tests = map_source_to_tests(filenames, tmp_dir)
 
@@ -128,10 +221,13 @@ def main():
         head_test_results = run_tests(tmp_dir, candidate_tests)
         head_coverage = get_coverage(tmp_dir, candidate_tests, filenames)
 
+        _remove_project_dependencies(tmp_dir)
         _checkout(tmp_dir, clone_url, base_sha)
+        _install_project_dependencies(tmp_dir)
         base_type_errors = type_check_files(tmp_dir, filenames)
         base_deps = dependency_state(tmp_dir)
         base_coverage = get_coverage(tmp_dir, candidate_tests, filenames)
+        _remove_project_dependencies(tmp_dir)
         _checkout(tmp_dir, clone_url, head_sha)  # restore for anything downstream
 
         results.extend(_normalize_type_errors(new_errors(head_type_errors, base_type_errors)))
@@ -162,7 +258,7 @@ def main():
         })
         print(json.dumps(output))
         sys.exit(0)
-    except (LintError, SecurityScanError, TypeCheckError, DependencyDiffError, TestRunError) as e:
+    except (LintError, SecurityScanError, TypeCheckError, DependencyDiffError, DependencyInstallError, TestRunError) as e:
         print(f"analysis error: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
@@ -170,6 +266,8 @@ def main():
         sys.exit(1)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        if source_copy_dir is not None:
+            shutil.rmtree(source_copy_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -128,13 +128,35 @@ def _parse_junit(junit_path: Path, requested_files: list[str]) -> list[dict]:
 
 
 def _run_jest(repo_dir: Path, files: list[str]) -> list[dict]:
+    grouped: dict[Path, list[str]] = {}
+    for filename in files:
+        project_dir = _node_project_dir(repo_dir, filename)
+        grouped.setdefault(project_dir, []).append(filename)
+
+    results = []
+    for project_dir, project_files in grouped.items():
+        results.extend(_run_jest_project(repo_dir, project_dir, project_files))
+    return results
+
+
+def _node_project_dir(repo_dir: Path, filename: str) -> Path:
+    current = (repo_dir / filename).parent
+    while current != repo_dir:
+        if (current / "package.json").is_file():
+            return current
+        current = current.parent
+    return repo_dir
+
+
+def _run_jest_project(repo_dir: Path, project_dir: Path, files: list[str]) -> list[dict]:
     out_name = ".pr_analysis_jest.json"
-    cmd = ["npx", "--yes", "jest", "--json", f"--outputFile={out_name}", *files]
-    proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=600, check=False)
+    project_files = [(repo_dir / f).relative_to(project_dir).as_posix() for f in files]
+    cmd = ["npx", "--yes", "jest", "--json", f"--outputFile={out_name}", *project_files]
+    proc = subprocess.run(cmd, cwd=project_dir, capture_output=True, text=True, timeout=600, check=False)
     if proc.returncode not in (0, 1):
         raise TestRunError(f"jest failed to run: {proc.stderr.strip() or proc.stdout.strip()}")
 
-    out_path = repo_dir / out_name
+    out_path = project_dir / out_name
     if not out_path.is_file():
         return [{"test_file": f, "status": "error", "source": "jest"} for f in files]
 
@@ -222,25 +244,31 @@ def _py_coverage(repo_dir: Path, test_files: list[str], source_files: list[str])
 
 
 def _js_coverage(repo_dir: Path, test_files: list[str], source_files: list[str]) -> dict[str, float | None]:
-    cmd = ["npx", "--yes", "jest", "--coverage", "--coverageReporters=json-summary", *test_files]
-    proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=600, check=False)
-    if proc.returncode not in (0, 1):
-        raise TestRunError(f"jest coverage failed: {proc.stderr.strip() or proc.stdout.strip()}")
+    result = {f: None for f in source_files}
+    grouped: dict[Path, list[str]] = {}
+    for filename in test_files:
+        grouped.setdefault(_node_project_dir(repo_dir, filename), []).append(filename)
 
-    summary_path = repo_dir / "coverage" / "coverage-summary.json"
-    if not summary_path.is_file():
-        return {f: None for f in source_files}
+    for project_dir, project_tests in grouped.items():
+        relative_tests = [(repo_dir / f).relative_to(project_dir).as_posix() for f in project_tests]
+        cmd = ["npx", "--yes", "jest", "--coverage", "--coverageReporters=json-summary", *relative_tests]
+        proc = subprocess.run(cmd, cwd=project_dir, capture_output=True, text=True, timeout=600, check=False)
+        if proc.returncode not in (0, 1):
+            raise TestRunError(f"jest coverage failed: {proc.stderr.strip() or proc.stdout.strip()}")
 
-    try:
-        data = json.loads(summary_path.read_text())
-    except json.JSONDecodeError as e:
-        raise TestRunError(f"could not parse jest coverage summary: {e}")
+        summary_path = project_dir / "coverage" / "coverage-summary.json"
+        if not summary_path.is_file():
+            continue
+        try:
+            data = json.loads(summary_path.read_text())
+        except json.JSONDecodeError as e:
+            raise TestRunError(f"could not parse jest coverage summary: {e}")
 
-    result = {}
-    for f in source_files:
-        abs_key = str((repo_dir / f).resolve())
-        entry = data.get(abs_key)
-        result[f] = entry["lines"]["pct"] if entry else None
+        for f in source_files:
+            abs_key = str((repo_dir / f).resolve())
+            entry = data.get(abs_key)
+            if entry:
+                result[f] = entry["lines"]["pct"]
     return result
 
 
@@ -278,7 +306,7 @@ def _discover_all_test_files(repo_dir: Path) -> set[str]:
     found = set()
     for pattern in _TEST_GLOBS:
         for p in repo_dir.rglob(pattern):
-            if "node_modules" in p.parts or ".git" in p.parts:
+            if "node_modules" in p.parts or ".pr-analysis-python" in p.parts or ".git" in p.parts:
                 continue
             found.add(p.relative_to(repo_dir).as_posix())
     return found

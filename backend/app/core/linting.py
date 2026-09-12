@@ -40,7 +40,10 @@ def clone_repo_at_sha(clone_url: str, sha: str, dest: Path) -> None:
         check=True,
     )
     subprocess.run(
-        ["git", "-C", str(dest), "fetch", "-q", "--depth", "1", clone_url, sha],
+        [
+            "git", "-c", f"safe.directory={clone_url}", "-C", str(dest),
+            "fetch", "-q", "--depth", "1", clone_url, sha,
+        ],
         check=True,
     )
     subprocess.run(
@@ -101,9 +104,32 @@ def run_eslint(repo_dir: Path, files: list[str]) -> list[dict]:
     if not files:
         return []
 
+    grouped: dict[Path, list[str]] = {}
+    for filename in files:
+        project_dir = _node_project_dir(repo_dir, filename)
+        grouped.setdefault(project_dir, []).append(
+            (repo_dir / filename).relative_to(project_dir).as_posix()
+        )
+
+    normalized = []
+    for project_dir, project_files in grouped.items():
+        normalized.extend(_run_eslint_project(repo_dir, project_dir, project_files))
+    return normalized
+
+
+def _node_project_dir(repo_dir: Path, filename: str) -> Path:
+    current = (repo_dir / filename).parent
+    while current != repo_dir:
+        if (current / "package.json").is_file():
+            return current
+        current = current.parent
+    return repo_dir
+
+
+def _run_eslint_project(repo_dir: Path, project_dir: Path, files: list[str]) -> list[dict]:
     result = subprocess.run(
         ["npx", "--yes", "eslint", "--format=json", *files],
-        cwd=repo_dir,
+        cwd=project_dir,
         capture_output=True,
         text=True,
         check=False,

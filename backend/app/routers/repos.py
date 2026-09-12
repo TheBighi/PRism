@@ -12,6 +12,33 @@ from app.models import (
 router = APIRouter(prefix="/api", tags=["repos"])
 
 
+def _risk_total(results) -> float | None:
+    if isinstance(results, dict):
+        total = results.get("total")
+    elif isinstance(results, list):
+        risk = next(
+            (item for item in results if isinstance(item, dict) and item.get("type") == "risk_score"),
+            None,
+        )
+        total = risk.get("total") if risk else None
+    else:
+        return None
+    return float(total) if isinstance(total, (int, float)) else None
+
+
+def _job_stats(jobs: list[AnalysisJob]) -> tuple[float | None, int, int, int]:
+    done_scores = [
+        score
+        for job in jobs
+        if job.status == JobStatus.done and (score := _risk_total(job.results)) is not None
+    ]
+    average = sum(done_scores) / len(done_scores) if done_scores else None
+    failed = sum(job.status == JobStatus.failed for job in jobs)
+    done = sum(job.status == JobStatus.done for job in jobs)
+    high_risk = sum(score >= 70 for score in done_scores)
+    return average, failed, done, high_risk
+
+
 async def require_repo_access(
     repo_id: int,
     db: Session = Depends(get_db),
@@ -54,13 +81,12 @@ def _get_repo_stats(repo_id: int, db: Session):
         func.count(PullRequest.id).filter(PullRequest.state == "open"),
     ).filter(PullRequest.repository_id == repo_id).one()
 
-    avg_risk = db.query(
-        func.avg(AnalysisJob.results["total"].as_float())
-    ).join(PullRequest, PullRequest.id == AnalysisJob.pull_request_id).filter(
+    jobs = db.query(AnalysisJob).join(
+        PullRequest, PullRequest.id == AnalysisJob.pull_request_id
+    ).filter(
         PullRequest.repository_id == repo_id,
-        AnalysisJob.status == JobStatus.done,
-        AnalysisJob.results.isnot(None),
-    ).scalar()
+    ).all()
+    avg_risk = _job_stats(jobs)[0]
 
     hotspot_count = db.query(func.count(FileRiskSummary.id)).filter(
         FileRiskSummary.repository_id == repo_id,
@@ -91,15 +117,16 @@ def _repo_summaries(
     ).group_by(PullRequest.repository_id).all()
     pr_stats_map = {row[0]: (row[1], row[2]) for row in pr_stats_rows}
 
-    risk_rows = db.query(
-        PullRequest.repository_id,
-        func.avg(AnalysisJob.results["total"].as_float()),
-    ).join(PullRequest, PullRequest.id == AnalysisJob.pull_request_id).filter(
-        PullRequest.repository_id.in_(repo_db_ids),
-        AnalysisJob.status == JobStatus.done,
-        AnalysisJob.results.isnot(None),
-    ).group_by(PullRequest.repository_id).all()
-    risk_map = {row[0]: row[1] for row in risk_rows}
+    job_rows = db.query(PullRequest.repository_id, AnalysisJob).join(
+        PullRequest, PullRequest.id == AnalysisJob.pull_request_id
+    ).filter(PullRequest.repository_id.in_(repo_db_ids)).all()
+    jobs_by_repo: dict[int, list[AnalysisJob]] = {}
+    for repository_id, job in job_rows:
+        jobs_by_repo.setdefault(repository_id, []).append(job)
+    risk_map = {
+        repository_id: _job_stats(jobs)[0]
+        for repository_id, jobs in jobs_by_repo.items()
+    }
 
     hotspot_rows = db.query(
         FileRiskSummary.repository_id,
@@ -209,17 +236,12 @@ def get_repo_health(repo_id: int, db: Session = Depends(get_db), _access: Reposi
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    job_stats = db.query(
-        func.avg(AnalysisJob.results["total"].as_float()),
-        func.count(AnalysisJob.id).filter(AnalysisJob.status == JobStatus.failed),
-        func.count(AnalysisJob.id).filter(AnalysisJob.status == JobStatus.done),
-        func.count(AnalysisJob.id).filter(
-            AnalysisJob.status == JobStatus.done,
-            AnalysisJob.results["total"].as_float() >= 70,
-        ),
-    ).join(PullRequest, PullRequest.id == AnalysisJob.pull_request_id).filter(
+    jobs = db.query(AnalysisJob).join(
+        PullRequest, PullRequest.id == AnalysisJob.pull_request_id
+    ).filter(
         PullRequest.repository_id == repo_id,
-    ).one()
+    ).all()
+    job_stats = _job_stats(jobs)
 
     pr_stats = db.query(
         func.count(PullRequest.id),
@@ -305,11 +327,8 @@ def list_pull_requests(repo_id: int, db: Session = Depends(get_db), _access: Rep
             "opened_at": pr.opened_at.isoformat() if pr.opened_at else None,
             "closed_at": pr.closed_at.isoformat() if pr.closed_at else None,
             "risk_score": (
-                latest_per_pr[pr.id].results.get("total")
-                if pr.id in latest_per_pr
-                and latest_per_pr[pr.id].results
-                and isinstance(latest_per_pr[pr.id].results, dict)
-                else None
+                _risk_total(latest_per_pr[pr.id].results)
+                if pr.id in latest_per_pr else None
             ),
             "job_status": (
                 latest_per_pr[pr.id].status.value
@@ -413,17 +432,12 @@ def get_repo_detail(repo_id: int, db: Session = Depends(get_db), _access: Reposi
     pr_count, open_pr, avg_risk, health, hot = _get_repo_stats(repo_id, db)
 
     # --- Health detail (1 query) ---
-    job_stats = db.query(
-        func.avg(AnalysisJob.results["total"].as_float()),
-        func.count(AnalysisJob.id).filter(AnalysisJob.status == JobStatus.failed),
-        func.count(AnalysisJob.id).filter(AnalysisJob.status == JobStatus.done),
-        func.count(AnalysisJob.id).filter(
-            AnalysisJob.status == JobStatus.done,
-            AnalysisJob.results["total"].as_float() >= 70,
-        ),
-    ).join(PullRequest, PullRequest.id == AnalysisJob.pull_request_id).filter(
+    jobs = db.query(AnalysisJob).join(
+        PullRequest, PullRequest.id == AnalysisJob.pull_request_id
+    ).filter(
         PullRequest.repository_id == repo_id,
-    ).one()
+    ).all()
+    job_stats = _job_stats(jobs)
 
     merged_prs = db.query(func.count(PullRequest.id)).filter(
         PullRequest.repository_id == repo_id, PullRequest.state == "merged"
@@ -471,11 +485,8 @@ def get_repo_detail(repo_id: int, db: Session = Depends(get_db), _access: Reposi
             "url": pr.url,
             "opened_at": pr.opened_at.isoformat() if pr.opened_at else None,
             "risk_score": (
-                latest_per_pr[pr.id].results.get("total")
-                if pr.id in latest_per_pr
-                and latest_per_pr[pr.id].results
-                and isinstance(latest_per_pr[pr.id].results, dict)
-                else None
+                _risk_total(latest_per_pr[pr.id].results)
+                if pr.id in latest_per_pr else None
             ),
             "job_status": (
                 latest_per_pr[pr.id].status.value

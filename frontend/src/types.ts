@@ -88,9 +88,9 @@ export interface AnalysisResult {
 }
 
 export interface AnalysisFinding {
-  filename?: string;
+  file?: string;
   line?: number;
-  col?: number;
+  column?: number;
   severity: string;
   message: string;
   code?: string;
@@ -99,7 +99,7 @@ export interface AnalysisFinding {
 }
 
 export interface DiffStat {
-  filename: string;
+  file: string;
   status: string;
   additions: number;
   deletions: number;

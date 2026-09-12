@@ -29,5 +29,5 @@ __pycache__/
 
 TEST_REPO
 
-private-key.pem
+*.pem
 .ruff_cache

@@ -18,6 +18,7 @@ from app.models import AnalyzedRepository, Repository, PullRequest, PullRequestF
 from app.auth import AuthContext, get_current_user, router as auth_router, github_repository_ids, get_http_client, close_http_client
 
 from app.core.queue import enqueue_pr_analysis, enqueue_sync_history, get_queue
+from app.core.github import get_installation_token
 from app.routers.repos import router as repos_router
 
 Base.metadata.create_all(bind=engine)
@@ -129,7 +130,12 @@ def update_installation_repositories(payload: dict, db: Session) -> None:
     db.commit()
 
 
-def store_pull_request(payload, db: Session):
+def store_pull_request(
+    payload,
+    db: Session,
+    store_files: bool = True,
+    github_token: str | None = None,
+):
     repo_data = payload["repository"]
     pr_data = payload["pull_request"]
     installation_id = payload.get("installation", {}).get("id")
@@ -140,7 +146,7 @@ def store_pull_request(payload, db: Session):
     if existing:
         existing.title = pr_data["title"]
         existing.body = pr_data.get("body")
-        existing.state = pr_data["state"]
+        existing.state = "merged" if pr_data.get("merged") else pr_data["state"]
         existing.draft = pr_data.get("draft", False)
         existing.source_branch = pr_data["head"]["ref"]
         existing.target_branch = pr_data["base"]["ref"]
@@ -156,7 +162,7 @@ def store_pull_request(payload, db: Session):
             number=pr_data["number"],
             title=pr_data["title"],
             body=pr_data.get("body"),
-            state=pr_data["state"],
+            state="merged" if pr_data.get("merged") else pr_data["state"],
             draft=pr_data.get("draft", False),
             author_login=pr_data["user"]["login"],
             source_branch=pr_data["head"]["ref"],
@@ -171,18 +177,19 @@ def store_pull_request(payload, db: Session):
 
     db.flush()
 
-    store_pr_files(pr, pr_data, repo_data, db)
+    if store_files:
+        store_pr_files(pr, pr_data, repo_data, db, github_token)
 
     db.commit()
 
     return pr, repo.id
 
 
-def store_pr_files(pr, pr_data, repo_data, db: Session):
+def store_pr_files(pr, pr_data, repo_data, db: Session, github_token: str | None = None):
     files_url = pr_data["url"] + "/files"
 
     headers = {}
-    github_token = os.environ.get("GITHUB_TOKEN")
+    github_token = github_token or os.environ.get("GITHUB_TOKEN")
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
@@ -255,7 +262,7 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
 
     if event_type == "pull_request":
         action = payload.get("action")
-        if action in ("opened", "synchronize", "reopened"):
+        if action in ("opened", "synchronize", "reopened", "closed"):
             repo = upsert_repository(
                 payload["repository"], payload.get("installation", {}).get("id"), db
             )
@@ -263,13 +270,28 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
                 AnalyzedRepository.repository_id == repo.id
             ).first() is not None
             db.commit()
-            if not enabled:
+            existing_pr = db.query(PullRequest).filter(
+                PullRequest.github_id == payload["pull_request"]["id"]
+            ).first()
+            if not enabled and (action != "closed" or existing_pr is None):
                 return JSONResponse(
                     status_code=202,
                     content={"ok": True, "analyzed": False},
                 )
 
-            pr, _repo_id = await run_in_threadpool(store_pull_request, payload, db)
+            github_token = None
+            if action != "closed":
+                installation_id = payload.get("installation", {}).get("id")
+                if not installation_id:
+                    raise HTTPException(status_code=422, detail="Missing GitHub installation ID")
+                github_token = await get_installation_token(installation_id)
+
+            pr, _repo_id = await run_in_threadpool(
+                store_pull_request, payload, db, action != "closed", github_token
+            )
+
+            if action == "closed":
+                return {"ok": True, "analyzed": True}
 
             queue = await get_queue()
 

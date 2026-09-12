@@ -55,11 +55,38 @@ def _run_mypy(repo_dir: Path, files: list[str]) -> list[TypeError_]:
 
 
 def _run_tsc(repo_dir: Path, files: list[str]) -> list[TypeError_]:
+    grouped: dict[Path, list[str]] = {}
+    for filename in files:
+        project_dir = _node_project_dir(repo_dir, filename)
+        grouped.setdefault(project_dir, []).append(
+            (repo_dir / filename).relative_to(project_dir).as_posix()
+        )
+
+    errors = []
+    for project_dir, project_files in grouped.items():
+        errors.extend(_run_tsc_project(repo_dir, project_dir, project_files))
+    return errors
+
+
+def _node_project_dir(repo_dir: Path, filename: str) -> Path:
+    current = (repo_dir / filename).parent
+    while current != repo_dir:
+        if (current / "package.json").is_file():
+            return current
+        current = current.parent
+    return repo_dir
+
+
+def _run_tsc_project(repo_dir: Path, project_dir: Path, files: list[str]) -> list[TypeError_]:
     cmd = ["npx", "tsc", "--noEmit", "--pretty", "false", *files]
-    proc = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, timeout=300, check=False)
+    proc = subprocess.run(cmd, cwd=project_dir, capture_output=True, text=True, timeout=300, check=False)
     if proc.returncode not in (0, 1, 2):
         raise TypeCheckError(f"tsc failed: {proc.stderr.strip() or proc.stdout.strip()}")
-    return _parse(proc.stdout, _TSC_RE, "tsc")
+    project_prefix = project_dir.relative_to(repo_dir)
+    return [
+        error._replace(file=(project_prefix / error.file).as_posix())
+        for error in _parse(proc.stdout, _TSC_RE, "tsc")
+    ]
 
 def _checks_js(repo_dir: Path) -> bool:
     tsconfig = repo_dir / "tsconfig.json"

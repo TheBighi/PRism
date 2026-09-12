@@ -58,7 +58,7 @@ def run_bandit(repo_dir: Path, files: list[str]) -> list[dict]:
 def run_npm_audit(repo_dir: Path) -> list[dict]:
     """npm audit is project-level, not per-file — only run it if there's a
     package.json to audit against."""
-    if not (repo_dir / "package.json").is_file():
+    if not (repo_dir / "package.json").is_file() or not (repo_dir / "package-lock.json").is_file():
         return []
 
     result = subprocess.run(

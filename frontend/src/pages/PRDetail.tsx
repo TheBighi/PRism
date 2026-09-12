@@ -77,7 +77,7 @@ export default function PRDetail() {
   const lintFindings = byType.get("linting")?.results ?? [];
   const typeFindings = byType.get("types")?.results ?? [];
   const depChanges = byType.get("dependencies")?.results ?? [];
-  const testResults = byType.get("test_results")?.results ?? [];
+  const testResults = byType.get("tests")?.results ?? [];
   const coverage = byType.get("coverage_delta")?.coverage ?? {};
   const diffStats = byType.get("diff_stats")?.stats ?? [];
 
@@ -327,8 +327,8 @@ export default function PRDetail() {
                 >
                   {t.severity === "error" ? "FAIL" : "PASS"}
                 </span>
-                <span className="test-name">{t.filename ?? t.message}</span>
-                {t.message && t.filename && (
+                <span className="test-name">{t.file ?? t.message}</span>
+                {t.message && t.file && (
                   <span className="test-message">{t.message}</span>
                 )}
               </div>
@@ -389,7 +389,7 @@ export default function PRDetail() {
           </div>
           <div className="file-list">
             {pr.files.map((f) => {
-              const ds = diffStats.find((d) => d.filename === f.filename);
+              const ds = diffStats.find((d) => d.file === f.filename);
               return (
                 <div key={f.id} className="file-row">
                   <span
@@ -507,7 +507,7 @@ function StaticAnalysisSection({
               <div className="finding-item__info">
                 <span className="finding-item__message">{f.message}</span>
                 <span className="finding-item__meta">
-                  {f.filename && <span className="finding-item__file">{f.filename}{f.line != null ? `:${f.line}` : ""}</span>}
+                  {f.file && <span className="finding-item__file">{f.file}{f.line != null ? `:${f.line}` : ""}</span>}
                   {f.code && <span className="finding-item__code">{f.code}</span>}
                 </span>
               </div>
