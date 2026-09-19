@@ -4,6 +4,8 @@ PRism is a tool for analyzing GitHub pull requests and showing useful informatio
 
 It connects to GitHub, analyzes pull requests automatically, and gives each pull request a risk score together with information that can help developers review changes more easily.
 
+Install to account at https://github.com/apps/prismintelligence
+
 > PRism is currently a work in progress.
 
 ## Features
@@ -131,130 +133,8 @@ PRism/
 └── docker-compose.yml
 ```
 
-## Running Locally
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/TheBighi/PRism.git
-cd PRism
-```
-
-### 2. Start PostgreSQL and Redis
-
-Docker Compose can start both services:
-
-```bash
-docker compose up -d
-```
-
-### 3. Set up the backend
-
-```bash
-cd backend
-
-python -m venv .venv
-```
-
-Activate the virtual environment.
-
-Linux/macOS:
-
-```bash
-source .venv/bin/activate
-```
-
-Windows:
-
-```powershell
-.venv\Scripts\activate
-```
-
-Install the dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Copy the environment file:
-
-```bash
-cp .env.example .env
-```
-
-On Windows you can use:
-
-```powershell
-copy .env.example .env
-```
-
-Then fill in the required GitHub, database, and AI settings inside `.env`.
-
-GitHub login also requires:
-
-```env
-GITHUB_CLIENT_ID=
-GITHUB_AUTH_SECRET=
-```
-
-### 4. Start the backend
-
-From the `backend` folder:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-The backend will run on:
-
-```text
-http://localhost:8000
-```
-
-### 5. Start the analysis workers
-
-Open another terminal inside the `backend` folder:
-
-```bash
-python -m app.workers.run_all
-```
-
-These workers handle pull request analysis, AI explanations, and repository history.
-
-### 6. Start the frontend
-
-Open another terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The frontend will run on:
-
-```text
-http://localhost:5173
-```
-
-## GitHub Integration
-
-PRism uses GitHub authentication and GitHub webhooks.
-
-The webhook endpoint is:
-
-```text
-/github/webhook
-```
-
-GitHub sends pull request events to PRism. When a pull request is opened or updated, PRism can automatically start a new analysis.
-
 ## Development Status
 
 PRism is still under development.
 
 Features, analysis methods, and the user interface may change as the project grows.
-
-## Author
-
-Created by [TheBighi](https://github.com/TheBighi).
