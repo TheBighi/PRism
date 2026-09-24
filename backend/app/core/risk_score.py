@@ -181,4 +181,4 @@ def compute_risk_score(analysis_output: list[dict], filenames: list[str]) -> dic
         total += contribution
         breakdown[category] = {"weight": weight, "contribution": round(contribution, 2), **sub}
 
-    return {"total": round(total, 1), "breakdown": breakdown}
+    return {"total": round(min(max(total, 0.0), 100.0), 1), "breakdown": breakdown}

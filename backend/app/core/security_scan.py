@@ -98,5 +98,18 @@ def scan_files(repo_dir: Path, filenames: list[str]) -> list[dict]:
 
     results = []
     results.extend(run_bandit(repo_dir, py_files))
-    results.extend(run_npm_audit(repo_dir))
+
+    # Audit each lockfile-backed Node project, including monorepo subfolders.
+    node_projects = {
+        lockfile.parent
+        for lockfile in repo_dir.glob("**/package-lock.json")
+        if "node_modules" not in lockfile.parts and ".git" not in lockfile.parts
+    }
+    for project_dir in sorted(node_projects):
+        project_results = run_npm_audit(project_dir)
+        prefix = project_dir.relative_to(repo_dir)
+        for finding in project_results:
+            finding = finding.copy()
+            finding["file"] = (prefix / finding["file"]).as_posix()
+            results.append(finding)
     return results

@@ -43,6 +43,41 @@ def test_failed_tests_contribute_to_risk_score():
     assert risk["breakdown"]["test_failure"]["failed_tests"] == ["tests/test_app.py"]
 
 
+def test_large_risky_pull_request_score_is_capped_at_100():
+    output = [
+        {"type": "diff_stats", "stats": [{"changes": 10_000}]},
+        {"type": "dependencies", "results": [{"message": "+ dangerous@1.0.0"}]},
+        {"type": "security", "results": [
+            {"severity": "critical"} for _ in range(20)
+        ]},
+        {"type": "coverage_delta", "coverage": {"src/auth.py": {"delta": -100}}},
+        {"type": "historical_risk", "files": {
+            "src/auth.py": {"risk_score": 500},
+        }},
+        {"type": "tests", "results": [
+            {"file": "tests/test_auth.py", "severity": "error"},
+            {"file": "tests/test_login.py", "severity": "error"},
+        ]},
+    ]
+
+    # Even invalid or extreme upstream values cannot escape the public 0-100 range.
+    assert compute_risk_score(output, ["src/auth.py"])["total"] == 100
+
+
+def test_clean_pull_request_has_zero_risk_score():
+    output = [
+        {"type": "diff_stats", "stats": []},
+        {"type": "dependencies", "results": []},
+        {"type": "security", "results": []},
+        {"type": "linting", "results": []},
+        {"type": "types", "results": []},
+        {"type": "coverage_delta", "coverage": {}},
+        {"type": "tests", "results": []},
+    ]
+
+    assert compute_risk_score(output, ["docs/readme.md"])["total"] == 0
+
+
 def test_dependency_install_supports_nested_projects_and_writable_npm_cache(tmp_path, monkeypatch):
     backend = tmp_path / "backend"
     frontend = tmp_path / "frontend"

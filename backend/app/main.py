@@ -21,11 +21,9 @@ from app.core.queue import enqueue_pr_analysis, enqueue_sync_history, get_queue
 from app.core.github import get_installation_token
 from app.routers.repos import router as repos_router
 
-Base.metadata.create_all(bind=engine)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
     await get_http_client()
     yield
     await close_http_client()
@@ -273,6 +271,13 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
             existing_pr = db.query(PullRequest).filter(
                 PullRequest.github_id == payload["pull_request"]["id"]
             ).first()
+            revision_already_queued = (
+                existing_pr is not None
+                and existing_pr.head_sha == payload["pull_request"]["head"]["sha"]
+                and db.query(AnalysisJob).filter(
+                    AnalysisJob.pull_request_id == existing_pr.id
+                ).first() is not None
+            )
             if not enabled and (action != "closed" or existing_pr is None):
                 return JSONResponse(
                     status_code=202,
@@ -292,6 +297,10 @@ async def github_webhook(request: Request, db: Session = Depends(get_db)):
 
             if action == "closed":
                 return {"ok": True, "analyzed": True}
+
+            # GitHub retries deliveries; an unchanged revision must not create another job.
+            if revision_already_queued:
+                return JSONResponse(status_code=202, content={"ok": True, "analyzed": True})
 
             queue = await get_queue()
 
